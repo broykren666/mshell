@@ -31,8 +31,8 @@ wget -O tuic.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/
 ```bash
 wget -O reality.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/reality.sh && chmod +x reality.sh && ./reality.sh
 ```
-
-
+*注：Alpine 用户如果提示命令不存在，请先执行 `apk add --no-cache wget bash`*
+*安装后可直接输入 `real` 进入管理菜单。*
 
 ---
 
@@ -41,7 +41,7 @@ wget -O reality.sh https://raw.githubusercontent.com/broykren666/mshell/refs/hea
 - **安全强密码/密钥**：支持手动自定义或自动生成强随机密码/UUID/密钥对，极大增强安全性。
 - **防火墙深度同步**：同时支持 `UFW` 和 `iptables`。在**安装**、**更改端口**或**卸载**时，脚本会自动添加或清理冗余规则（Hy2/TUIC 为 UDP，Reality 为 TCP）。
 - **智能依赖预检**：自动补齐 `jq`, `curl`, `openssl`, `unzip`, `ca-certificates` 等工具，确保在各平台上稳健运行。
-- **快捷键支持**：自动创建全局命令（`hy2`, `tuic`, `reality`），安装后即可通过短命令一键唤起管理菜单。
+- **快捷键支持**：自动创建全局命令（`hy2`, `tuic`, `real`），安装后即可通过短命令一键唤起管理菜单。
 - **高可用保活**：
   - **Debian/Ubuntu**: 使用 `systemd` 并配置 `Restart=always` 监控。
   - **Alpine**: 使用 `supervise-daemon` 实现进程级保活。
