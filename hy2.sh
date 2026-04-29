@@ -39,7 +39,7 @@ prepare_env() {
         fi
     done
 
-    if [ ${#missing[@]} -ne 0 ]; then
+    if [[ "${#missing[@]}" -ne 0 ]]; then
         echo -e "${YELLOW}▶ 正在安装必要依赖: ${missing[*]}...${NC}"
         if [ "$OS" = "alpine" ]; then
             apk add --no-cache "${missing[@]}"
@@ -127,15 +127,13 @@ optimize_bbr() {
 
 # 获取并显示信息
 show_info() {
-    if [ ! -f "$CONF" ]; then
+    if [[ ! -f "$CONF" ]]; then
         echo -e "${RED}❌ 配置文件不存在${NC}"
         return
     fi
 
     prepare_env
-    PORT=$(jq -r '.listen' "$CONF" | sed 's/://g')
-    PASSWORD=$(jq -r '.auth.password' "$CONF")
-    DOMAIN=$(cat "$WORKDIR/domain.txt" 2>/dev/null || echo "")
+    local PORT PASSWORD DOMAIN CERT_PATH INSECURE IP4 IP6
     
     # 检测是否使用自签证书 (简单判断: 如果证书在 WORKDIR 下则视为自签)
     local CERT_PATH=$(jq -r '.tls.cert' "$CONF")
@@ -219,7 +217,7 @@ install_hy2() {
     
     read -p "请输入监听端口 (回车10000-65535随机): " PORT
     [[ -z "$PORT" ]] && PORT=$(( ( RANDOM % 55535 ) + 10000 ))
-    if [[ ! "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+    if [[ ! "$PORT" =~ ^[0-9]+$ ]] || [[ "$PORT" -lt 1 ]] || [[ "$PORT" -gt 65535 ]]; then
         PORT=$(( ( RANDOM % 55535 ) + 10000 ))
         echo -e "${YELLOW}输入无效，已分配随机端口: $PORT${NC}"
     fi
@@ -389,7 +387,7 @@ IP6_MAIN=$(curl -s6 --connect-timeout 2 ip.sb || curl -s6 --connect-timeout 2 ic
 
 while true; do
 # 状态检测逻辑
-if [ "$OS" = "alpine" ]; then
+if [[ "$OS" = "alpine" ]]; then
     if rc-service hysteria status 2>/dev/null | grep -q "started"; then
         STATUS="${GREEN}正在运行${NC}"
     else
