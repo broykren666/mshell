@@ -1,52 +1,99 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -e
 
-# 颜色定义
-green='\033[1;32m'
-plain='\033[0m'
-magenta='\033[1;35m'
-yellow='\033[1;33m'
-cyan='\033[1;36m' 
-
-# 路径定义
+### ===== 配置参数 =====
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_CONFIG_DIR="/usr/local/etc/xray"
 XRAY_CONFIG="${XRAY_CONFIG_DIR}/config.json"
 XRAY_PRIV_KEY="${XRAY_CONFIG_DIR}/private.key"
 XRAY_PUB_KEY="${XRAY_CONFIG_DIR}/public.key"
-XRAY_SERVICE="/etc/systemd/system/xray.service"
-XRAY_INIT_ALPINE="/etc/init.d/xray"
+PORT_FILE="${XRAY_CONFIG_DIR}/port.txt"
+### =====================
 
-# 检查 root 权限
-[[ $EUID -ne 0 ]] && echo -e "${magenta}请在 root 用户下运行脚本${plain}" && exit 1
+GREEN='\e[32m'
+RED='\e[31m'
+YELLOW='\e[33m'
+CYAN='\e[36m'
+NC='\e[0m'
 
-# 识别系统并安装依赖
-install_dependencies() {
-    if command -v apt &>/dev/null; then
-        apt-get update && apt-get install -y jq curl openssl lsof unzip wget ca-certificates
-    elif command -v apk &>/dev/null; then
-        apk add jq curl openssl bash lsof unzip wget ca-certificates
-        update-ca-certificates
-    else
-        echo -e "${magenta}暂不支持的系统!${plain}" && exit 1
+[[ "$(id -u)" != "0" ]] && { echo -e "${RED}❌ 请使用 root 运行${NC}"; exit 1; }
+
+# 环境判断
+if command -v apk >/dev/null 2>&1; then
+    OS="alpine"
+elif command -v apt >/dev/null 2>&1; then
+    OS="debian"
+else
+    echo -e "${RED}❌ 仅支持 Alpine / Debian / Ubuntu${NC}"
+    exit 1
+fi
+
+# 依赖检查与安装
+prepare_env() {
+    local deps=("curl" "jq" "openssl" "ca-certificates" "bash" "unzip" "wget")
+    local missing=()
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            missing+=("$dep")
+        fi
+    done
+
+    if [ ${#missing[@]} -ne 0 ]; then
+        echo -e "${YELLOW}▶ 正在安装必要依赖: ${missing[*]}...${NC}"
+        if [ "$OS" = "alpine" ]; then
+            apk add --no-cache "${missing[@]}"
+            update-ca-certificates
+        else
+            apt update && apt install -y "${missing[@]}"
+        fi
     fi
 }
 
-# 自动检测架构并下载
+# 防火墙管理
+manage_firewall() {
+    local action=$1
+    local port=$2
+    [[ -z "$port" ]] && return
+
+    if command -v ufw >/dev/null 2>&1; then
+        if [ "$action" = "add" ]; then
+            ufw allow "$port"/tcp >/dev/null 2>&1
+        else
+            ufw delete allow "$port"/tcp >/dev/null 2>&1
+        fi
+    elif command -v iptables >/dev/null 2>&1; then
+        if [ "$action" = "add" ]; then
+            iptables -I INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
+        else
+            iptables -D INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
+        fi
+    fi
+}
+
+# 重启服务
+restart_service() {
+    if [ "$OS" = "alpine" ]; then
+        rc-service xray restart
+    else
+        systemctl restart xray
+    fi
+}
+
+# 架构检测并下载 Xray
 download_xray() {
     local arch=""
     case "$(uname -m)" in
-        x86_64 | x64 | amd64) arch="64" ;;
-        aarch64 | arm64) arch="arm64-v8a" ;;
-        *) echo -e "${magenta}不支持的架构: $(uname -m)${plain}" && exit 1 ;;
+        x86_64|x64|amd64) arch="64" ;;
+        aarch64|arm64) arch="arm64-v8a" ;;
+        *) echo -e "${RED}❌ 不支持的架构: $(uname -m)${NC}"; exit 1 ;;
     esac
 
     local url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
-    echo -e "${cyan}检测到架构: $(uname -m), 正在下载 Xray-core...${plain}"
+    echo -e "${YELLOW}▶ 正在下载 Xray-core ($arch)...${NC}"
     
     wget -qO /tmp/xray.zip "$url"
     if [[ $? -ne 0 ]]; then
-        echo -e "${magenta}下载失败，请检查网络${plain}"
-        exit 1
+        echo -e "${RED}❌ 下载失败，请检查网络${NC}"; exit 1
     fi
 
     mkdir -p /tmp/xray_temp
@@ -56,62 +103,91 @@ download_xray() {
     rm -rf /tmp/xray.zip /tmp/xray_temp
 }
 
-# 适配服务管理
-manage_service() {
-    local action=$1
-    if command -v systemctl &>/dev/null; then
-        systemctl $action xray
-    elif command -v rc-service &>/dev/null; then
-        rc-service xray $action
+# 获取并显示节点信息
+show_info() {
+    if [ ! -f "$XRAY_CONFIG" ]; then
+        echo -e "${RED}❌ 配置文件不存在${NC}"; return
     fi
-}
 
-# 检查服务状态
-is_active() {
-    if command -v systemctl &>/dev/null; then
-        systemctl is-active --quiet xray
-    elif command -v rc-service &>/dev/null; then
-        rc-service xray status 2>/dev/null | grep -q "started"
-    else
-        pgrep -x "xray" >/dev/null
-    fi
-}
-
-# 显示菜单
-show_menu() {
-    clear
-    echo -e "${green}==================================================${plain}"
-    echo -e "  VLESS-REALITY 一键管理脚本"
-    echo -e "  当前系统：$(ID= && [ -f /etc/os-release ] && . /etc/os-release && echo $ID || echo "unknown")"
+    prepare_env
+    UUID=$(jq -r '.inbounds[0].settings.clients[0].id' "$XRAY_CONFIG")
+    PORT=$(jq -r '.inbounds[0].port' "$XRAY_CONFIG")
+    SID=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$XRAY_CONFIG")
+    PUB_KEY=$(cat "$XRAY_PUB_KEY" 2>/dev/null || echo "")
     
-    if is_active; then
-        echo -e "  Xray状态： ${green}正在运行${plain}"
-    else
-        echo -e "  Xray状态： ${magenta}未运行${plain}"
+    if [[ -z "$PUB_KEY" ]]; then
+        local priv=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$XRAY_CONFIG")
+        PUB_KEY=$($XRAY_BIN x25519 -i "$priv" | grep -i 'Public' | awk -F': ' '{print $2}' | tr -d '[:space:]')
+        echo "$PUB_KEY" > "$XRAY_PUB_KEY"
     fi
-    echo -e "${green}==================================================${plain}"
-    echo -e "  ${cyan}[1]${plain}  安装 VLESS-REALITY"
-    echo -e "  ${cyan}[2]${plain}  查看节点链接"
-    echo -e "  ${cyan}[3]${plain}  更改监听端口"
-    echo -e "  ${cyan}[4]${plain}  重启服务"
-    echo -e "  ${cyan}[5]${plain}  卸载 VLESS-REALITY"
-    echo -e "  ${cyan}[0]${plain}  退出脚本"
-    echo -e "${green}==================================================${plain}"
-    echo -ne "请输入数字选择 [0-5]: "
-    read num
+
+    echo -e "${YELLOW}正在检测公网 IP 地址...${NC}"
+    IPV4=$(curl -s4m 5 ip.sb || curl -s4m 5 api.ipify.org || echo "")
+    IPV6=$(curl -s6m 5 ip.sb || curl -s6m 5 api6.ipify.org || echo "")
+
+    echo -e "\n${GREEN}========== VLESS-REALITY 配置信息 ==========${NC}"
+    echo -e "🌐 IPv4地址: ${YELLOW}$IPV4${NC}"
+    echo -e "🌐 IPv6地址: ${YELLOW}$IPV6${NC}"
+    echo -e "📌 UUID: ${YELLOW}$UUID${NC}"
+    echo -e "🎲 端口: ${YELLOW}$PORT${NC}"
+    echo -e "🔑 Public Key: ${YELLOW}$PUB_KEY${NC}"
+    echo -e "🆔 Short ID: ${YELLOW}$SID${NC}"
+    
+    local link_suffix="encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.shopify.com&fp=chrome&pbk=${PUB_KEY}&sid=${SID}&type=tcp&headerType=none"
+    
+    if [[ -n "$IPV4" ]]; then
+        echo -e "\n${GREEN}📎 VLESS 节点链接 (IPv4):${NC}"
+        echo -e "${YELLOW}vless://${UUID}@${IPV4}:${PORT}?${link_suffix}#REALITY_V4${NC}"
+    fi
+    
+    if [[ -n "$IPV6" ]]; then
+        echo -e "\n${GREEN}📎 VLESS 节点链接 (IPv6):${NC}"
+        echo -e "${YELLOW}vless://${UUID}@[${IPV6}]:${PORT}?${link_suffix}#REALITY_V6${NC}"
+    fi
+    echo -e "${GREEN}===============================================${NC}\n"
 }
 
-# 安装逻辑
+# 修改端口
+change_port() {
+    if [ ! -f "$XRAY_CONFIG" ]; then
+        echo -e "${RED}❌ 请先安装 VLESS-REALITY${NC}"; return
+    fi
+    prepare_env
+    OLD_PORT=$(jq -r '.inbounds[0].port' "$XRAY_CONFIG")
+    echo -e "当前监听端口为: ${YELLOW}$OLD_PORT${NC}"
+    read -p "请输入新端口 (回车10000-65535随机): " NEW_PORT
+    
+    [[ -z "$NEW_PORT" ]] && NEW_PORT=$(( ( RANDOM % 55535 ) + 10000 ))
+    if [[ ! "$NEW_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_PORT" -lt 1 ] || [ "$NEW_PORT" -gt 65535 ]; then
+        echo -e "${RED}❌ 输入无效${NC}"; return
+    fi
+
+    # 更新防火墙
+    manage_firewall "del" "$OLD_PORT"
+    manage_firewall "add" "$NEW_PORT"
+
+    tmp=$(mktemp)
+    jq --argjson p "$NEW_PORT" '.inbounds[0].port = $p' "$XRAY_CONFIG" > "$tmp" && mv "$tmp" "$XRAY_CONFIG"
+    echo "$NEW_PORT" > "$PORT_FILE"
+    
+    restart_service
+    echo -e "${GREEN}✅ 端口已更改为 $NEW_PORT${NC}"
+    show_info
+}
+
+# 安装 REALITY
 install_reality() {
-    install_dependencies
+    prepare_env
     download_xray
     
     mkdir -p "$XRAY_CONFIG_DIR"
     
+    # 生成密钥对
     local key_pair=$($XRAY_BIN x25519 2>&1)
-    priv_key=$(echo "${key_pair}" | grep -i 'Private' | awk -F': ' '{print $2}' | tr -d '[:space:]')
-    pub_key=$(echo "${key_pair}" | grep -i 'Public' | awk -F': ' '{print $2}' | tr -d '[:space:]')
-
+    local priv_key=$(echo "${key_pair}" | grep -i 'Private' | awk -F': ' '{print $2}' | tr -d '[:space:]')
+    local pub_key=$(echo "${key_pair}" | grep -i 'Public' | awk -F': ' '{print $2}' | tr -d '[:space:]')
+    
+    # 兼容性处理
     if [[ -z "$priv_key" ]]; then
         priv_key=$(echo "${key_pair}" | awk '/Private/{print $2}' | tr -d '[:space:]')
         pub_key=$(echo "${key_pair}" | awk '/Public/{print $2}' | tr -d '[:space:]')
@@ -120,18 +196,26 @@ install_reality() {
     echo "$priv_key" > "$XRAY_PRIV_KEY"
     echo "$pub_key" > "$XRAY_PUB_KEY"
 
-    RANDOM_PORT=$(shuf -i 10000-65535 -n 1)
-    UUID=${UUID:-$(cat /proc/sys/kernel/random/uuid)}
-    sid=$(openssl rand -hex 8)
+    read -p "请输入监听端口 (回车10000-65535随机): " PORT
+    [[ -z "$PORT" ]] && PORT=$(( ( RANDOM % 55535 ) + 10000 ))
+    if [[ ! "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+        PORT=$(( ( RANDOM % 55535 ) + 10000 ))
+        echo -e "${YELLOW}输入无效，已分配随机端口: $PORT${NC}"
+    fi
 
+    echo "$PORT" > "$PORT_FILE"
+    UUID=$(cat /proc/sys/kernel/random/uuid)
+    SID=$(openssl rand -hex 8)
+
+    # 生成配置
     jq -n \
-        --arg port "$RANDOM_PORT" --arg uuid "$UUID" \
-        --arg priv "$priv_key" --arg sid "$sid" \
+        --argjson port "$PORT" --arg uuid "$UUID" \
+        --arg priv "$priv_key" --arg sid "$SID" \
         '
         {
           "log": {"loglevel": "warning"},
           "inbounds": [{
-            "port": ($port | tonumber),
+            "port": $port,
             "protocol": "vless",
             "settings": {
               "clients": [{"id": $uuid, "flow": "xtls-rprx-vision"}],
@@ -154,8 +238,27 @@ install_reality() {
         }
         ' > "$XRAY_CONFIG"
 
-    if command -v systemctl &>/dev/null; then
-        cat <<EOF > "$XRAY_SERVICE"
+    # 配置防火墙
+    manage_firewall "add" "$PORT"
+
+    # 服务部署
+    if [ "$OS" = "alpine" ]; then
+        cat <<EOF > /etc/init.d/xray
+#!/sbin/openrc-run
+description="Xray Service"
+command="$XRAY_BIN"
+command_args="run -config $XRAY_CONFIG"
+command_background="yes"
+pidfile="/run/xray.pid"
+supervisor="supervise-daemon"
+depend() {
+    need net
+}
+EOF
+        chmod +x /etc/init.d/xray
+        rc-update add xray default >/dev/null 2>&1
+    else
+        cat <<EOF > /etc/systemd/system/xray.service
 [Unit]
 Description=Xray Service
 After=network.target nss-lookup.target
@@ -163,110 +266,110 @@ After=network.target nss-lookup.target
 User=root
 ExecStart=$XRAY_BIN run -config $XRAY_CONFIG
 Restart=always
-RestartSec=5
+LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
         systemctl enable xray >/dev/null 2>&1
-    elif command -v rc-service &>/dev/null; then
-        cat <<EOF > "$XRAY_INIT_ALPINE"
-#!/sbin/openrc-run
-description="Xray Service"
-command="$XRAY_BIN"
-command_args="run -config $XRAY_CONFIG"
-command_background="yes"
-pidfile="/run/xray.pid"
-respawn_delay=5
-supervise_daemon_args="--respawn"
-depend() {
-    need net
-    after firewall
-}
-EOF
-        chmod +x "$XRAY_INIT_ALPINE"
-        rc-update add xray default >/dev/null 2>&1
     fi
     
-    manage_service restart
-    echo -e "${green}安装成功！端口：$RANDOM_PORT${plain}"
-    view_config
-}
+    # 配置快捷命令
+    SCRIPT_PATH=$(readlink -f "$0")
+    ln -sf "$SCRIPT_PATH" /usr/local/bin/reality
+    chmod +x /usr/local/bin/reality
 
-# 查看配置
-view_config() {
-    if [ ! -f "$XRAY_CONFIG" ]; then
-        echo -e "${magenta}未发现配置文件！${plain}"
-    else
-        UUID=$(jq -r '.inbounds[0].settings.clients[0].id' "$XRAY_CONFIG")
-        PORT=$(jq -r '.inbounds[0].port' "$XRAY_CONFIG")
-        sid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$XRAY_CONFIG")
-        
-        if [ ! -s "$XRAY_PUB_KEY" ]; then
-            local priv=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$XRAY_CONFIG")
-            pubKey=$($XRAY_BIN x25519 -i "$priv" | grep -i 'Public' | awk -F': ' '{print $2}' | tr -d '[:space:]')
-            [[ -z "$pubKey" ]] && pubKey=$($XRAY_BIN x25519 -i "$priv" | awk '/Public/{print $2}' | tr -d '[:space:]')
-            echo "$pubKey" > "$XRAY_PUB_KEY"
-        else
-            pubKey=$(cat "$XRAY_PUB_KEY")
-        fi
-
-        IPV4=$(curl -s4m 5 ipv4.ip.sb || curl -s4m 5 api.ipify.org)
-        IPV6=$(curl -s6m 5 ipv6.ip.sb || curl -s6m 5 api6.ipify.org)
-
-        echo -e "\n${green}--- 节点链接信息 ---${plain}"
-        if [ -n "$IPV4" ]; then
-            echo -e "${green}[IPv4 节点]:${plain}"
-            echo -e "${yellow}vless://${UUID}@${IPV4}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.shopify.com&fp=chrome&pbk=${pubKey}&sid=${sid}&type=tcp&headerType=none#REALITY_v4${plain}\n"
-        fi
-        if [ -n "$IPV6" ]; then
-            echo -e "${green}[IPv6 节点]:${plain}"
-            echo -e "${yellow}vless://${UUID}@[${IPV6}]:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.shopify.com&fp=chrome&pbk=${pubKey}&sid=${sid}&type=tcp&headerType=none#REALITY_v6${plain}\n"
-        fi
-    fi
-    read -p "按回车键返回菜单..."
-}
-
-# 修改端口
-change_port() {
-    if [ ! -f "$XRAY_CONFIG" ]; then
-        echo -e "${magenta}未安装服务！${plain}"
-    else
-        echo -ne "请输入新端口 (回车随机生成): "
-        read input_port
-        NEW_PORT=${input_port:-$(shuf -i 10000-65535 -n 1)}
-        tmp=$(mktemp)
-        jq --argjson p "$NEW_PORT" '.inbounds[0].port = $p' "$XRAY_CONFIG" > "$tmp" && mv "$tmp" "$XRAY_CONFIG"
-        manage_service restart
-        echo -e "${green}端口已改为 $NEW_PORT 并重启服务${plain}"
-        view_config
-    fi
+    restart_service
+    echo -e "${GREEN}✅ VLESS-REALITY 安装完成${NC}"
+    echo -e "${CYAN}💡 快捷键已创建，下次可直接输入 ${YELLOW}reality${CYAN} 进入此菜单${NC}"
+    show_info
 }
 
 # 卸载
 uninstall_reality() {
-    manage_service stop
-    if command -v systemctl &>/dev/null; then
-        systemctl disable xray >/dev/null 2>&1
-        rm -f "$XRAY_SERVICE"
-    elif command -v rc-service &>/dev/null; then
-        rc-update del xray >/dev/null 2>&1
-        rm -f "$XRAY_INIT_ALPINE"
+    echo -e "${YELLOW}▶ 正在卸载...${NC}"
+    
+    # 清理快捷命令
+    rm -f /usr/local/bin/reality
+    # 清理防火墙
+    if [ -f "$PORT_FILE" ]; then
+        OLD_PORT=$(cat "$PORT_FILE")
+        manage_firewall "del" "$OLD_PORT"
+    fi
+
+    if [ "$OS" = "alpine" ]; then
+        rc-service xray stop || true
+        rc-update del xray || true
+        rm -f /etc/init.d/xray
+    else
+        systemctl stop xray || true
+        systemctl disable xray || true
+        rm -f /etc/systemd/system/xray.service
+        systemctl daemon-reload
     fi
     rm -rf "$XRAY_BIN" "$XRAY_CONFIG_DIR"
-    echo -e "${green}卸载完成${plain}"
-    sleep 2
+    echo -e "${GREEN}✅ 卸载成功${NC}"
 }
 
 while true; do
-    show_menu
-    case "$num" in
-        1) install_reality ;;
-        2) view_config ;;
-        3) change_port ;;
-        4) manage_service restart && echo -e "${green}已执行重启${plain}" && sleep 2 ;;
-        5) uninstall_reality ;;
-        0) exit 0 ;;
-        *) sleep 1 ;;
+# 状态检测逻辑
+if [ "$OS" = "alpine" ]; then
+    if rc-service xray status 2>/dev/null | grep -q "started"; then
+        STATUS="${GREEN}正在运行${NC}"
+    else
+        STATUS="${RED}未安装或未运行${NC}"
+    fi
+else
+    if systemctl is-active --quiet xray 2>/dev/null; then
+        STATUS="${GREEN}正在运行${NC}"
+    else
+        STATUS="${RED}未安装或未运行${NC}"
+    fi
+fi
+
+# 菜单
+clear
+echo -e "${GREEN}===============================================${NC}"
+echo -e "  VLESS-REALITY 一键管理脚本"
+echo -e "  当前系统: $OS"
+echo -e "  Xray状态： $STATUS"
+echo -e "${GREEN}===============================================${NC}"
+echo -e "  ${CYAN}[1]${NC}  安装 VLESS-REALITY"
+echo -e "  ${CYAN}[2]${NC}  查看配置节点链接"
+echo -e "  ${CYAN}[3]${NC}  更改监听端口"
+echo -e "  ${CYAN}[4]${NC}  重启服务"
+echo -e "  ${CYAN}[5]${NC}  卸载 VLESS-REALITY"
+echo -e "  ${CYAN}[0]${NC}  退出脚本"
+echo -e "${GREEN}===============================================${NC}"
+echo -ne "请输入数字选择 [0-5]: "
+read choice
+
+case $choice in
+        1)
+            install_reality
+            ;;
+        2)
+            show_info
+            ;;
+        3)
+            change_port
+            ;;
+        4)
+            restart_service && echo -e "${GREEN}服务已重启${NC}"
+            ;;
+        5)
+            uninstall_reality
+            ;;
+        0)
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}无效输入，请重新选择${NC}"
+            sleep 1
+            ;;
     esac
+
+    echo -e "\n${YELLOW}按任意键返回主菜单...${NC}"
+    read -n 1 -s -r
+    clear
 done
