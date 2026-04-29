@@ -113,7 +113,9 @@ show_info() {
     UUID=$(jq -r '.inbounds[0].settings.clients[0].id' "$XRAY_CONFIG")
     PORT=$(jq -r '.inbounds[0].port' "$XRAY_CONFIG")
     SID=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$XRAY_CONFIG")
+    DEST_DOMAIN=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$XRAY_CONFIG")
     PUB_KEY=$(cat "$XRAY_PUB_KEY" 2>/dev/null || echo "")
+    DOMAIN=$(cat "$XRAY_CONFIG_DIR/domain.txt" 2>/dev/null || echo "")
     
     if [[ -z "$PUB_KEY" ]]; then
         local priv=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$XRAY_CONFIG")
@@ -126,23 +128,29 @@ show_info() {
     IPV6=$(curl -s6m 5 ip.sb || curl -s6m 5 api6.ipify.org || echo "")
 
     echo -e "\n${GREEN}========== VLESS-REALITY 配置信息 ==========${NC}"
+    [[ -n "$DOMAIN" ]] && echo -e "🌐 连接域名: ${YELLOW}$DOMAIN${NC}"
     echo -e "🌐 IPv4地址: ${YELLOW}$IPV4${NC}"
     echo -e "🌐 IPv6地址: ${YELLOW}$IPV6${NC}"
     echo -e "📌 UUID: ${YELLOW}$UUID${NC}"
     echo -e "🎲 端口: ${YELLOW}$PORT${NC}"
     echo -e "🔑 Public Key: ${YELLOW}$PUB_KEY${NC}"
     echo -e "🆔 Short ID: ${YELLOW}$SID${NC}"
+    echo -e "🎭 伪装域名: ${YELLOW}$DEST_DOMAIN${NC}"
     
-    local link_suffix="encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.shopify.com&fp=chrome&pbk=${PUB_KEY}&sid=${SID}&type=tcp&headerType=none"
+    local link_suffix="encryption=none&flow=xtls-rprx-vision&security=reality&sni=${DEST_DOMAIN}&fp=chrome&pbk=${PUB_KEY}&sid=${SID}&type=tcp&headerType=none"
     
-    if [[ -n "$IPV4" ]]; then
-        echo -e "\n${GREEN}📎 VLESS 节点链接 (IPv4):${NC}"
-        echo -e "${YELLOW}vless://${UUID}@${IPV4}:${PORT}?${link_suffix}#REALITY_V4${NC}"
+    local ADDR_V4="${DOMAIN:-$IPV4}"
+    local ADDR_V6="${DOMAIN:-$IPV6}"
+    [[ -z "$DOMAIN" && -n "$IPV6" ]] && ADDR_V6="[$IPV6]"
+
+    if [[ -n "$IPV4" || -n "$DOMAIN" ]]; then
+        echo -e "\n${GREEN}📎 VLESS 节点链接 (IPv4/Domain):${NC}"
+        echo -e "${YELLOW}vless://${UUID}@${ADDR_V4}:${PORT}?${link_suffix}#REALITY_V4${NC}"
     fi
     
-    if [[ -n "$IPV6" ]]; then
+    if [[ -n "$IPV6" && -z "$DOMAIN" ]]; then
         echo -e "\n${GREEN}📎 VLESS 节点链接 (IPv6):${NC}"
-        echo -e "${YELLOW}vless://${UUID}@[${IPV6}]:${PORT}?${link_suffix}#REALITY_V6${NC}"
+        echo -e "${YELLOW}vless://${UUID}@${ADDR_V6}:${PORT}?${link_suffix}#REALITY_V6${NC}"
     fi
     echo -e "${GREEN}===============================================${NC}\n"
 }
@@ -207,10 +215,21 @@ install_reality() {
     UUID=$(cat /proc/sys/kernel/random/uuid)
     SID=$(openssl rand -hex 8)
 
+    read -p "请输入连接域名 (可选, 直接回车使用 IP): " DOMAIN
+    if [[ -n "$DOMAIN" ]]; then
+        echo "$DOMAIN" > "$XRAY_CONFIG_DIR/domain.txt"
+    else
+        rm -f "$XRAY_CONFIG_DIR/domain.txt"
+    fi
+
+    # 默认伪装目标
+    local DEST_DOMAIN="www.shopify.com"
+
     # 生成配置
     jq -n \
         --argjson port "$PORT" --arg uuid "$UUID" \
         --arg priv "$priv_key" --arg sid "$SID" \
+        --arg dest "$DEST_DOMAIN" \
         '
         {
           "log": {"loglevel": "warning"},
@@ -226,9 +245,9 @@ install_reality() {
               "security": "reality",
               "realitySettings": {
                 "show": false,
-                "dest": "www.shopify.com:443",
+                "dest": ($dest + ":443"),
                 "xver": 0,
-                "serverNames": ["www.shopify.com"],
+                "serverNames": [$dest],
                 "privateKey": $priv,
                 "shortIds": [$sid]
               }
