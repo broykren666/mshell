@@ -17,20 +17,21 @@
 ### 1. Hysteria2 (Hy2)
 
 ```bash
-wget -O hy2.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/hy2.sh && chmod +x hy2.sh && ./hy2.sh
+wget -O hy2.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/auto/hy2.sh && chmod +x hy2.sh && ./hy2.sh
 ```
 
 ### 2. TUIC
 
 ```bash
-wget -O tuic.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/tuic.sh && chmod +x tuic.sh && ./tuic.sh
+wget -O tuic.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/auto/tuic.sh && chmod +x tuic.sh && ./tuic.sh
 ```
 
 ### 3. VLESS-Reality
 
 ```bash
-wget -O reality.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/reality.sh && chmod +x reality.sh && ./reality.sh
+wget -O reality.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/auto/reality.sh && chmod +x reality.sh && ./reality.sh
 ```
+
 *注：Alpine 用户如果提示命令不存在，请先执行 `apk add --no-cache wget bash`*
 *安装后可直接输入 `real` 进入管理菜单。*
 
