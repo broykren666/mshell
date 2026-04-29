@@ -51,18 +51,18 @@ prepare_env() {
 
 # 防火墙管理
 manage_firewall() {
-    local action=$1
-    local port=$2
+    local action="$1"
+    local port="$2"
     [[ -z "$port" ]] && return
 
     if command -v ufw >/dev/null 2>&1; then
-        if [ "$action" = "add" ]; then
+        if [[ "$action" = "add" ]]; then
             ufw allow "$port"/udp >/dev/null 2>&1
         else
             ufw delete allow "$port"/udp >/dev/null 2>&1
         fi
     elif command -v iptables >/dev/null 2>&1; then
-        if [ "$action" = "add" ]; then
+        if [[ "$action" = "add" ]]; then
             iptables -I INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
         else
             iptables -D INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
@@ -72,10 +72,56 @@ manage_firewall() {
 
 # 重启服务
 restart_service() {
-    if [ "$OS" = "alpine" ]; then
+    if [[ "$OS" = "alpine" ]]; then
         rc-service hysteria restart
     else
         systemctl restart hysteria
+    fi
+}
+
+# 查看日志
+view_logs() {
+    echo -e "${YELLOW}▶ 正在查看实时日志 (按 Ctrl+C 退出)...${NC}"
+    if [[ "$OS" = "alpine" ]]; then
+        tail -f /var/log/messages | grep hysteria || echo -e "${RED}无法读取日志${NC}"
+    else
+        journalctl -u hysteria -f
+    fi
+}
+
+# BBR 优化尝试
+optimize_bbr() {
+    echo -e "${YELLOW}▶ 正在检测 BBR 状态...${NC}"
+    local current_control
+    current_control=$(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')
+    if [[ "$current_control" == "bbr" ]]; then
+        echo -e "${GREEN}✅ BBR 已经开启${NC}"
+        return
+    fi
+
+    local available
+    available=$(sysctl net.ipv4.tcp_available_congestion_control | grep "bbr" || true)
+    if [[ -z "$available" ]]; then
+        echo -e "${RED}❌ 当前内核不支持 BBR，请先升级内核${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}▶ 尝试开启 BBR...${NC}"
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        local virt
+        virt=$(systemd-detect-virt)
+        [[ "$virt" == "openvz" || "$virt" == "lxc" ]] && echo -e "${RED}⚠️ 检测到容器环境 ($virt)，修改可能失败${NC}"
+    fi
+
+    sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+    echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    
+    if sysctl -p >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ BBR 开启成功！${NC}"
+    else
+        echo -e "${RED}❌ BBR 开启失败，权限不足${NC}"
     fi
 }
 
@@ -123,16 +169,17 @@ show_info() {
 
 # 更改端口
 change_port() {
-    if [ ! -f "$CONF" ]; then
+    if [[ ! -f "$CONF" ]]; then
         echo -e "${RED}❌ 请先安装 Hysteria2${NC}"; return
     fi
     prepare_env
+    local OLD_PORT NEW_PORT
     OLD_PORT=$(jq -r '.listen' "$CONF" | sed 's/://g')
     echo -e "当前端口为: ${YELLOW}$OLD_PORT${NC}"
     read -p "请输入新端口 (回车10000-65535随机): " NEW_PORT
     
     [[ -z "$NEW_PORT" ]] && NEW_PORT=$(( ( RANDOM % 55535 ) + 10000 ))
-    if [[ ! "$NEW_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_PORT" -lt 1 ] || [ "$NEW_PORT" -gt 65535 ]; then
+    if [[ ! "$NEW_PORT" =~ ^[0-9]+$ ]] || [[ "$NEW_PORT" -lt 1 ]] || [[ "$NEW_PORT" -gt 65535 ]]; then
         echo -e "${RED}❌ 输入无效${NC}"; return
     fi
 
@@ -181,6 +228,9 @@ install_hy2() {
     echo "$PORT" > "$PORT_FILE"
 
     read -p "请输入绑定的域名 (可选, 直接回车使用 IP): " DOMAIN
+    read -p "请输入伪装域名 (回车默认 www.bing.com): " CUSTOM_SNI
+    [[ -z "$CUSTOM_SNI" ]] && CUSTOM_SNI="$SERVER_NAME"
+
     local USE_CUSTOM_CERT="n"
     local CERT_FILE_PATH="$WORKDIR/cert.pem"
     local KEY_FILE_PATH="$WORKDIR/key.pem"
@@ -205,7 +255,7 @@ install_hy2() {
 
     if [[ "$USE_CUSTOM_CERT" != "y" && "$USE_CUSTOM_CERT" != "Y" ]]; then
         echo -e "${YELLOW}▶ 生成自签证书...${NC}"
-        openssl req -x509 -nodes -newkey rsa:2048 -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" -days 3650 -subj "/CN=${DOMAIN:-$SERVER_NAME}" 2>/dev/null
+        openssl req -x509 -nodes -newkey rsa:2048 -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" -days 3650 -subj "/CN=${DOMAIN:-$CUSTOM_SNI}" 2>/dev/null
         CERT_FILE_PATH="$WORKDIR/cert.pem"
         KEY_FILE_PATH="$WORKDIR/key.pem"
     fi
@@ -216,7 +266,7 @@ install_hy2() {
         --arg cert "$CERT_FILE_PATH" \
         --arg key "$KEY_FILE_PATH" \
         --arg pass "$PASSWORD" \
-        --arg sni "${DOMAIN:-$SERVER_NAME}" \
+        --arg sni "${DOMAIN:-$CUSTOM_SNI}" \
         '{
             "listen": $port,
             "tls": {
@@ -241,7 +291,7 @@ install_hy2() {
     manage_firewall "add" "$PORT"
 
     # 服务部署
-    if [ "$OS" = "alpine" ]; then
+    if [[ "$OS" = "alpine" ]]; then
         cat > /etc/init.d/hysteria <<EOF
 #!/sbin/openrc-run
 name="hysteria"
@@ -289,12 +339,13 @@ uninstall_hy2() {
     # 清理快捷命令
     rm -f /usr/local/bin/hy2
     # 清理防火墙
-    if [ -f "$PORT_FILE" ]; then
+    if [[ -f "$PORT_FILE" ]]; then
+        local OLD_PORT
         OLD_PORT=$(cat "$PORT_FILE")
         manage_firewall "del" "$OLD_PORT"
     fi
 
-    if [ "$OS" = "alpine" ]; then
+    if [[ "$OS" = "alpine" ]]; then
         rc-service hysteria stop || true
         rc-update del hysteria || true
         rm -f /etc/init.d/hysteria
@@ -364,12 +415,14 @@ echo -e "${GREEN}===============================================${NC}"
 echo -e "  ${CYAN}[1]${NC}  安装 Hysteria2"
 echo -e "  ${CYAN}[2]${NC}  查看配置节点链接"
 echo -e "  ${CYAN}[3]${NC}  更改监听端口"
-echo -e "  ${CYAN}[4]${NC}  重启服务"
-echo -e "  ${CYAN}[5]${NC}  卸载 Hysteria2"
-echo -e "  ${CYAN}[6]${NC}  更新管理脚本"
+echo -e "  ${CYAN}[4]${NC}  查看实时日志"
+echo -e "  ${CYAN}[5]${NC}  优化 BBR 加速"
+echo -e "  ${CYAN}[6]${NC}  重启服务"
+echo -e "  ${CYAN}[7]${NC}  卸载 Hysteria2"
+echo -e "  ${CYAN}[8]${NC}  更新管理脚本"
 echo -e "  ${CYAN}[0]${NC}  退出脚本"
 echo -e "${GREEN}===============================================${NC}"
-echo -ne "请输入数字选择 [0-6]: "
+echo -ne "请输入数字选择 [0-8]: "
 read choice
 
 case $choice in
@@ -383,12 +436,18 @@ case $choice in
             change_port
             ;;
         4)
-            restart_service && echo -e "${GREEN}服务已重启${NC}"
+            view_logs
             ;;
         5)
-            uninstall_hy2
+            optimize_bbr
             ;;
         6)
+            restart_service && echo -e "${GREEN}服务已重启${NC}"
+            ;;
+        7)
+            uninstall_hy2
+            ;;
+        8)
             update_script
             ;;
         0)
