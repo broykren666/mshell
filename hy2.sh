@@ -154,7 +154,9 @@ install_hy2() {
     curl -L -o "$BIN" "https://github.com/apernet/hysteria/releases/latest/download/$FILE"
     chmod +x "$BIN"
 
-    PASSWORD=$(openssl rand -hex 4)
+    read -p "请输入认证密码 (回车生成随机强密码): " PASSWORD
+    [[ -z "$PASSWORD" ]] && PASSWORD=$(openssl rand -hex 12)
+    echo -e "${YELLOW}🔑 使用密码: ${PASSWORD}${NC}"
     
     read -p "请输入监听端口 (回车10000-65535随机): " PORT
     [[ -z "$PORT" ]] && PORT=$(( ( RANDOM % 55535 ) + 10000 ))
