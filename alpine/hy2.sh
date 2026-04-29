@@ -82,13 +82,19 @@ echo "▶ 正在启动服务..."
 rc-update add hysteria default
 service hysteria restart || rc-service hysteria start
 
-# 9. 输出配置信息
+# 9. 获取公网 IP 用于生成链接
+IP=$(curl -s4 --connect-timeout 5 ip.sb || curl -s4 --connect-timeout 5 icanhazip.com || echo "YOUR_IP")
+
+# 10. 输出配置信息与节点链接
 echo "------------------------------------------------------------------------"
 echo "Hysteria2 Alpine 专版安装完成！"
 echo "默认端口： $PORT"
 echo "连接密码： $GENPASS"
 echo "伪装 SNI： $SNI"
 echo "配置文件： $WORKDIR/config.yaml"
+echo ""
+echo "📎 节点链接："
+echo -e "\033[33mhy2://$GENPASS@$IP:$PORT/?sni=$SNI&alpn=h3&insecure=1#Alpine_Hy2\033[0m"
 echo ""
 echo "常用命令："
 echo "- 状态: service hysteria status"
