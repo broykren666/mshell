@@ -331,6 +331,11 @@ update_script() {
     fi
 }
 
+# 获取 IP 用于菜单显示
+echo -e "${YELLOW}正在检测系统环境...${NC}"
+IP4_MAIN=$(curl -s4 --connect-timeout 2 ip.sb || curl -s4 --connect-timeout 2 icanhazip.com || echo "未检测到")
+IP6_MAIN=$(curl -s6 --connect-timeout 2 ip.sb || curl -s6 --connect-timeout 2 icanhazip.com || echo "未检测到")
+
 while true; do
 # 状态检测逻辑
 if [ "$OS" = "alpine" ]; then
@@ -351,8 +356,10 @@ fi
 clear
 echo -e "${GREEN}===============================================${NC}"
 echo -e "  Hysteria2 一键管理脚本"
-echo -e "  当前系统: $OS"
-echo -e "  Hy2状态： $STATUS"
+echo -e "  当前系统: ${CYAN}$OS${NC}"
+echo -e "  IPv4 地址: ${YELLOW}$IP4_MAIN${NC}"
+echo -e "  IPv6 地址: ${YELLOW}$IP6_MAIN${NC}"
+echo -e "  Hy2 状态： $STATUS"
 echo -e "${GREEN}===============================================${NC}"
 echo -e "  ${CYAN}[1]${NC}  安装 Hysteria2"
 echo -e "  ${CYAN}[2]${NC}  查看配置节点链接"
