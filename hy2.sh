@@ -228,8 +228,14 @@ EOF
         systemctl enable hysteria
     fi
     
+    # 配置快捷命令
+    SCRIPT_PATH=$(readlink -f "$0")
+    ln -sf "$SCRIPT_PATH" /usr/local/bin/hy2
+    chmod +x /usr/local/bin/hy2
+
     restart_service
     echo -e "${GREEN}✅ Hysteria2 安装完成 ${NC}"
+    echo -e "${CYAN}💡 快捷键已创建，下次可直接输入 ${YELLOW}hy2${CYAN} 进入此菜单${NC}"
     show_info
 }
 
@@ -237,6 +243,8 @@ EOF
 uninstall_hy2() {
     echo -e "${YELLOW}▶ 正在卸载...${NC}"
     
+    # 清理快捷命令
+    rm -f /usr/local/bin/hy2
     # 清理防火墙
     if [ -f "$PORT_FILE" ]; then
         OLD_PORT=$(cat "$PORT_FILE")
