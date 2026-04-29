@@ -89,22 +89,34 @@ show_info() {
     prepare_env
     PORT=$(jq -r '.listen' "$CONF" | sed 's/://g')
     PASSWORD=$(jq -r '.auth.password' "$CONF")
+    DOMAIN=$(cat "$WORKDIR/domain.txt" 2>/dev/null || echo "")
+    
+    # 检测是否使用自签证书 (简单判断: 如果证书在 WORKDIR 下则视为自签)
+    local CERT_PATH=$(jq -r '.tls.cert' "$CONF")
+    local INSECURE="0"
+    [[ "$CERT_PATH" == "$WORKDIR/"* ]] && INSECURE="1"
 
     echo -e "${YELLOW}正在检测公网 IP 地址...${NC}"
     IP4=$(curl -s4 --connect-timeout 5 ip.sb || curl -s4 --connect-timeout 5 icanhazip.com || echo "")
     IP6=$(curl -s6 --connect-timeout 5 ip.sb || curl -s6 --connect-timeout 5 icanhazip.com || echo "")
 
     echo -e "\n${GREEN}========== Hysteria2 配置信息 ==========${NC}"
+    [[ -n "$DOMAIN" ]] && echo -e "🌐 绑定域名: ${YELLOW}$DOMAIN${NC}"
     echo -e "📌 IPv4地址: ${YELLOW}$IP4${NC}"
     echo -e "📌 IPv6地址: ${YELLOW}$IP6${NC}"
     echo -e "🎲 监听端口: ${YELLOW}$PORT${NC}"
     echo -e "🔐 认证密码: ${YELLOW}$PASSWORD${NC}"
     
-    [[ -n "$IP4" ]] && echo -e "\n${GREEN}📎 节点链接 (IPv4):${NC}\n${YELLOW}hy2://$PASSWORD@$IP4:$PORT/?sni=$SERVER_NAME&alpn=h3&insecure=1#${TAG}_V4${NC}"
-    [[ -n "$IP6" ]] && echo -e "\n${GREEN}📎 节点链接 (IPv6):${NC}\n${YELLOW}hy2://$PASSWORD@[$IP6]:$PORT/?sni=$SERVER_NAME&alpn=h3&insecure=1#${TAG}_V6${NC}"
+    local ADDR_V4="${DOMAIN:-$IP4}"
+    local ADDR_V6="${DOMAIN:-$IP6}"
+    # 如果是 IPv6 且不是域名，需要加方括号
+    [[ -z "$DOMAIN" && -n "$IP6" ]] && ADDR_V6="[$IP6]"
+
+    [[ -n "$IP4" || -n "$DOMAIN" ]] && echo -e "\n${GREEN}📎 节点链接 (IPv4/Domain):${NC}\n${YELLOW}hy2://$PASSWORD@$ADDR_V4:$PORT/?sni=${DOMAIN:-$SERVER_NAME}&alpn=h3&insecure=$INSECURE#${TAG}_V4${NC}"
+    [[ -n "$IP6" && -z "$DOMAIN" ]] && echo -e "\n${GREEN}📎 节点链接 (IPv6):${NC}\n${YELLOW}hy2://$PASSWORD@$ADDR_V6:$PORT/?sni=$SERVER_NAME&alpn=h3&insecure=$INSECURE#${TAG}_V6${NC}"
     
-    if [[ -z "$IP4" && -z "$IP6" ]]; then
-        echo -e "${RED}❌ 无法检测到公网 IP${NC}"
+    if [[ -z "$IP4" && -z "$IP6" && -z "$DOMAIN" ]]; then
+        echo -e "${RED}❌ 无法检测到公网 IP 或域名${NC}"
     fi
     echo -e "${GREEN}===============================================${NC}\n"
 }
@@ -168,16 +180,43 @@ install_hy2() {
     echo "$PASSWORD" > "$PASS_FILE"
     echo "$PORT" > "$PORT_FILE"
 
-    echo -e "${YELLOW}▶ 生成自签证书...${NC}"
-    openssl req -x509 -nodes -newkey rsa:2048 -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" -days 3650 -subj "/CN=$SERVER_NAME" 2>/dev/null
+    read -p "请输入绑定的域名 (可选, 直接回车使用 IP): " DOMAIN
+    local USE_CUSTOM_CERT="n"
+    local CERT_FILE_PATH="$WORKDIR/cert.pem"
+    local KEY_FILE_PATH="$WORKDIR/key.pem"
+
+    if [[ -n "$DOMAIN" ]]; then
+        echo "$DOMAIN" > "$WORKDIR/domain.txt"
+        read -p "是否使用自己的 SSL 证书? (y/n, 默认生成自签证书): " USE_CUSTOM_CERT
+        if [[ "$USE_CUSTOM_CERT" == "y" || "$USE_CUSTOM_CERT" == "Y" ]]; then
+            read -p "请输入证书文件路径 (.crt/.pem): " CUSTOM_CERT
+            read -p "请输入私钥文件路径 (.key): " CUSTOM_KEY
+            if [[ -f "$CUSTOM_CERT" && -f "$CUSTOM_KEY" ]]; then
+                CERT_FILE_PATH="$CUSTOM_CERT"
+                KEY_FILE_PATH="$CUSTOM_KEY"
+            else
+                echo -e "${RED}❌ 证书文件不存在，将降级为生成自签证书${NC}"
+                USE_CUSTOM_CERT="n"
+            fi
+        fi
+    else
+        rm -f "$WORKDIR/domain.txt"
+    fi
+
+    if [[ "$USE_CUSTOM_CERT" != "y" && "$USE_CUSTOM_CERT" != "Y" ]]; then
+        echo -e "${YELLOW}▶ 生成自签证书...${NC}"
+        openssl req -x509 -nodes -newkey rsa:2048 -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" -days 3650 -subj "/CN=${DOMAIN:-$SERVER_NAME}" 2>/dev/null
+        CERT_FILE_PATH="$WORKDIR/cert.pem"
+        KEY_FILE_PATH="$WORKDIR/key.pem"
+    fi
 
     # 使用 jq 构建初始 JSON 配置
     jq -n \
         --arg port ":$PORT" \
-        --arg cert "$WORKDIR/cert.pem" \
-        --arg key "$WORKDIR/key.pem" \
+        --arg cert "$CERT_FILE_PATH" \
+        --arg key "$KEY_FILE_PATH" \
         --arg pass "$PASSWORD" \
-        --arg sni "$SERVER_NAME" \
+        --arg sni "${DOMAIN:-$SERVER_NAME}" \
         '{
             "listen": $port,
             "tls": {
