@@ -89,26 +89,37 @@ show_info() {
     PORT=$(echo $SERVER_ADDR | rev | cut -d: -f1 | rev | sed 's/\]//g')
     UUID=$(jq -r '.users | keys[0]' "$CONF")
     PASS=$(jq -r ".users.\"$UUID\"" "$CONF")
+    DOMAIN=$(cat "$WORK_DIR/domain.txt" 2>/dev/null || echo "")
+
+    # 检测是否使用自签证书
+    local CERT_PATH=$(jq -r '.tls.certificate' "$CONF")
+    local INSECURE="0"
+    [[ "$CERT_PATH" == "$WORK_DIR/"* ]] && INSECURE="1"
     
     echo -e "${YELLOW}正在检测公网 IP 地址...${NC}"
     IP4=$(curl -s4 --connect-timeout 5 ip.sb || curl -s4 --connect-timeout 5 icanhazip.com || echo "")
     IP6=$(curl -s6 --connect-timeout 5 ip.sb || curl -s6 --connect-timeout 5 icanhazip.com || echo "")
 
     echo -e "\n${GREEN}========== TUIC 配置信息 ==========${NC}"
+    [[ -n "$DOMAIN" ]] && echo -e "🌐 绑定域名: ${YELLOW}$DOMAIN${NC}"
     echo -e "🌐 IPv4地址: ${YELLOW}$IP4${NC}"
     echo -e "🌐 IPv6地址: ${YELLOW}$IP6${NC}"
     echo -e "📌 UUID: ${YELLOW}$UUID${NC}"
     echo -e "🔐 密码: ${YELLOW}$PASS${NC}"
     echo -e "🎲 端口: ${YELLOW}$PORT${NC}"
     
-    if [[ -n "$IP4" ]]; then
-        echo -e "\n${GREEN}📎 TUIC 节点链接 (IPv4):${NC}"
-        echo -e "${YELLOW}tuic://$UUID:$PASS@$IP4:$PORT?congestion_control=bbr&alpn=h3&insecure=1&sni=www.bing.com#TUIC_V4${NC}"
+    local ADDR_V4="${DOMAIN:-$IP4}"
+    local ADDR_V6="${DOMAIN:-$IP6}"
+    [[ -z "$DOMAIN" && -n "$IP6" ]] && ADDR_V6="[$IP6]"
+
+    if [[ -n "$IP4" || -n "$DOMAIN" ]]; then
+        echo -e "\n${GREEN}📎 TUIC 节点链接 (IPv4/Domain):${NC}"
+        echo -e "${YELLOW}tuic://$UUID:$PASS@$ADDR_V4:$PORT?congestion_control=bbr&alpn=h3&insecure=$INSECURE&sni=${DOMAIN:-www.bing.com}#TUIC_V4${NC}"
     fi
     
-    if [[ -n "$IP6" ]]; then
+    if [[ -n "$IP6" && -z "$DOMAIN" ]]; then
         echo -e "\n${GREEN}📎 TUIC 节点链接 (IPv6):${NC}"
-        echo -e "${YELLOW}tuic://$UUID:$PASS@[$IP6]:$PORT?congestion_control=bbr&alpn=h3&insecure=1&sni=www.bing.com#TUIC_V6${NC}"
+        echo -e "${YELLOW}tuic://$UUID:$PASS@$ADDR_V6:$PORT?congestion_control=bbr&alpn=h3&insecure=$INSECURE&sni=www.bing.com#TUIC_V6${NC}"
     fi
     echo -e "${GREEN}===============================================${NC}\n"
 }
@@ -179,6 +190,38 @@ install_tuic() {
     BIND_ADDR="0.0.0.0"
     ip -6 addr | grep -q "global" && BIND_ADDR="[::]"
 
+    read -p "请输入绑定的域名 (可选, 直接回车使用 IP): " DOMAIN
+    local USE_CUSTOM_CERT="n"
+    local CERT_FILE_PATH="$WORK_DIR/cert.pem"
+    local KEY_FILE_PATH="$WORK_DIR/key.pem"
+
+    if [[ -n "$DOMAIN" ]]; then
+        echo "$DOMAIN" > "$WORK_DIR/domain.txt"
+        read -p "是否使用自己的 SSL 证书? (y/n, 默认生成自签证书): " USE_CUSTOM_CERT
+        if [[ "$USE_CUSTOM_CERT" == "y" || "$USE_CUSTOM_CERT" == "Y" ]]; then
+            read -p "请输入证书文件路径 (.crt/.pem): " CUSTOM_CERT
+            read -p "请输入私钥文件路径 (.key): " CUSTOM_KEY
+            if [[ -f "$CUSTOM_CERT" && -f "$CUSTOM_KEY" ]]; then
+                CERT_FILE_PATH="$CUSTOM_CERT"
+                KEY_FILE_PATH="$CUSTOM_KEY"
+            else
+                echo -e "${RED}❌ 证书文件不存在，将降级为生成自签证书${NC}"
+                USE_CUSTOM_CERT="n"
+            fi
+        fi
+    else
+        rm -f "$WORK_DIR/domain.txt"
+    fi
+
+    if [[ "$USE_CUSTOM_CERT" != "y" && "$USE_CUSTOM_CERT" != "Y" ]]; then
+        echo -e "${YELLOW}▶ 生成自签证书...${NC}"
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+            -keyout "$WORK_DIR/key.pem" -out "$WORK_DIR/cert.pem" \
+            -subj "/CN=${DOMAIN:-www.bing.com}" -days 3650 -nodes 2>/dev/null
+        CERT_FILE_PATH="$WORK_DIR/cert.pem"
+        KEY_FILE_PATH="$WORK_DIR/key.pem"
+    fi
+
     cat > $CONF <<EOF
 {
   "server": "${BIND_ADDR}:${PORT}",
@@ -189,17 +232,12 @@ install_tuic() {
   "auth_timeout": "3s",
   "zero_rtt_handshake": false,
   "tls": {
-    "certificate": "${WORK_DIR}/cert.pem",
-    "private_key": "${WORK_DIR}/key.pem",
+    "certificate": "${CERT_FILE_PATH}",
+    "private_key": "${KEY_FILE_PATH}",
     "alpn": ["h3"]
   }
 }
 EOF
-
-    echo -e "${YELLOW}▶ 生成自签证书...${NC}"
-    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-        -keyout "${WORK_DIR}/key.pem" -out "${WORK_DIR}/cert.pem" \
-        -subj "/CN=www.bing.com" -days 3650 -nodes 2>/dev/null
 
     # 配置防火墙
     manage_firewall "add" "$PORT"
