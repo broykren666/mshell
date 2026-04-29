@@ -13,24 +13,18 @@
 ## 🚀 快速开始
 
 ### 1. Hysteria2 (Hy2)
-
 在你的服务器上执行以下命令进行安装：
-
 ```bash
 wget -O hy2.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/hy2.sh && chmod +x hy2.sh && ./hy2.sh
 ```
-
-*安装后可直接输入 `hy2` 进入管理菜单。*
+*注：Alpine 用户如果提示命令不存在，请先执行 `apk add --no-cache wget bash`*
 
 ### 2. TUIC
-
 在你的服务器上执行以下命令进行安装：
-
 ```bash
 wget -O tuic.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/tuic.sh && chmod +x tuic.sh && ./tuic.sh
 ```
-
-*安装后可直接输入 `tuic` 进入管理菜单。*
+*注：Alpine 用户如果提示命令不存在，请先执行 `apk add --no-cache wget bash`*
 
 ---
 
