@@ -275,15 +275,17 @@ EOF
     fi
 
     # 配置快捷命令
-    SCRIPT_PATH=$(readlink -f "$0")
-    ln -sf "$SCRIPT_PATH" /usr/local/bin/tuic
-    chmod +x /usr/local/bin/tuic
+    local SCRIPT_PATH=$(readlink -f "$0")
+    if [[ "$SCRIPT_PATH" != "/usr/local/bin/tuic" ]]; then
+        ln -sf "$SCRIPT_PATH" /usr/local/bin/tuic
+        chmod +x /usr/local/bin/tuic
+    fi
 
     restart_service
     echo -e "${GREEN}✅ TUIC 安装并配置完成${NC}"
     echo -e "${CYAN}💡 快捷键已创建，下次可直接输入 ${YELLOW}tuic${CYAN} 进入此菜单${NC}"
     show_info
-}
+    }
 
 # 卸载
 uninstall_tuic() {

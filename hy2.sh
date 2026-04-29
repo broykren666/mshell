@@ -270,15 +270,17 @@ EOF
     fi
     
     # 配置快捷命令
-    SCRIPT_PATH=$(readlink -f "$0")
-    ln -sf "$SCRIPT_PATH" /usr/local/bin/hy2
-    chmod +x /usr/local/bin/hy2
+    local SCRIPT_PATH=$(readlink -f "$0")
+    if [[ "$SCRIPT_PATH" != "/usr/local/bin/hy2" ]]; then
+        ln -sf "$SCRIPT_PATH" /usr/local/bin/hy2
+        chmod +x /usr/local/bin/hy2
+    fi
 
     restart_service
     echo -e "${GREEN}✅ Hysteria2 安装完成 ${NC}"
     echo -e "${CYAN}💡 快捷键已创建，下次可直接输入 ${YELLOW}hy2${CYAN} 进入此菜单${NC}"
     show_info
-}
+    }
 
 # 卸载
 uninstall_hy2() {

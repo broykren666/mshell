@@ -275,9 +275,11 @@ EOF
     fi
     
     # 配置快捷命令
-    SCRIPT_PATH=$(readlink -f "$0")
-    ln -sf "$SCRIPT_PATH" /usr/local/bin/real
-    chmod +x /usr/local/bin/real
+    local SCRIPT_PATH=$(readlink -f "$0")
+    if [[ "$SCRIPT_PATH" != "/usr/local/bin/real" ]]; then
+        ln -sf "$SCRIPT_PATH" /usr/local/bin/real
+        chmod +x /usr/local/bin/real
+    fi
 
     restart_service
     echo -e "${GREEN}✅ VLESS-REALITY 安装完成${NC}"
