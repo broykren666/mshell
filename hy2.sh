@@ -29,6 +29,47 @@ else
     exit 1
 fi
 
+# 依赖检查与安装
+prepare_env() {
+    local deps=("curl" "jq" "openssl" "ca-certificates" "bash")
+    local missing=()
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            missing+=("$dep")
+        fi
+    done
+
+    if [ ${#missing[@]} -ne 0 ]; then
+        echo -e "${YELLOW}▶ 正在安装必要依赖: ${missing[*]}...${NC}"
+        if [ "$OS" = "alpine" ]; then
+            apk add --no-cache "${missing[@]}"
+        else
+            apt update && apt install -y "${missing[@]}"
+        fi
+    fi
+}
+
+# 防火墙管理
+manage_firewall() {
+    local action=$1
+    local port=$2
+    [[ -z "$port" ]] && return
+
+    if command -v ufw >/dev/null 2>&1; then
+        if [ "$action" = "add" ]; then
+            ufw allow "$port"/udp >/dev/null 2>&1
+        else
+            ufw delete allow "$port"/udp >/dev/null 2>&1
+        fi
+    elif command -v iptables >/dev/null 2>&1; then
+        if [ "$action" = "add" ]; then
+            iptables -I INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
+        else
+            iptables -D INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
+        fi
+    fi
+}
+
 # 重启服务
 restart_service() {
     if [ "$OS" = "alpine" ]; then
@@ -45,7 +86,7 @@ show_info() {
         return
     fi
 
-    # 使用 jq 精确解析 JSON
+    prepare_env
     PORT=$(jq -r '.listen' "$CONF" | sed 's/://g')
     PASSWORD=$(jq -r '.auth.password' "$CONF")
 
@@ -73,6 +114,7 @@ change_port() {
     if [ ! -f "$CONF" ]; then
         echo -e "${RED}❌ 请先安装 Hysteria2${NC}"; return
     fi
+    prepare_env
     OLD_PORT=$(jq -r '.listen' "$CONF" | sed 's/://g')
     echo -e "当前端口为: ${YELLOW}$OLD_PORT${NC}"
     read -p "请输入新端口 (回车10000-65535随机): " NEW_PORT
@@ -82,11 +124,14 @@ change_port() {
         echo -e "${RED}❌ 输入无效${NC}"; return
     fi
 
+    # 更新防火墙
+    manage_firewall "del" "$OLD_PORT"
+    manage_firewall "add" "$NEW_PORT"
+
     # 使用 jq 修改并回写
     jq --arg p ":$NEW_PORT" '.listen = $p' "$CONF" > "$CONF.tmp" && mv "$CONF.tmp" "$CONF"
     echo "$NEW_PORT" > "$PORT_FILE"
     
-    command -v ufw >/dev/null 2>&1 && ufw allow "$NEW_PORT"/udp
     restart_service
     echo -e "${GREEN}✅ 端口已更改为 $NEW_PORT${NC}"
     show_info
@@ -94,22 +139,18 @@ change_port() {
 
 # 安装
 install_hy2() {
-    echo -e "${YELLOW}▶ 正在安装依赖 ...${NC}"
-    if [ "$OS" = "alpine" ]; then
-        apk add --no-cache curl openssl ca-certificates bash jq
-    else
-        apt update && apt install -y curl openssl ca-certificates bash jq
-    fi
+    prepare_env
     
     mkdir -p "$WORKDIR"
     ARCH=$(uname -m)
     case "$ARCH" in
         x86_64) FILE="hysteria-linux-amd64" ;;
-        aarch64) FILE="hysteria-linux-arm64" ;;
-        *) echo "❌ 不支持的架构"; exit 1 ;;
+        aarch64|arm64) FILE="hysteria-linux-arm64" ;;
+        armv7l|armhf) FILE="hysteria-linux-arm" ;;
+        *) echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
     esac
 
-    echo -e "${YELLOW}▶ 下载 Hysteria2...${NC}"
+    echo -e "${YELLOW}▶ 下载 Hysteria2 ($ARCH)...${NC}"
     curl -L -o "$BIN" "https://github.com/apernet/hysteria/releases/latest/download/$FILE"
     chmod +x "$BIN"
 
@@ -148,6 +189,9 @@ install_hy2() {
             }
         }' > "$CONF"
 
+    # 配置防火墙
+    manage_firewall "add" "$PORT"
+
     # 服务部署
     if [ "$OS" = "alpine" ]; then
         cat > /etc/init.d/hysteria <<EOF
@@ -185,6 +229,13 @@ EOF
 # 卸载
 uninstall_hy2() {
     echo -e "${YELLOW}▶ 正在卸载...${NC}"
+    
+    # 清理防火墙
+    if [ -f "$PORT_FILE" ]; then
+        OLD_PORT=$(cat "$PORT_FILE")
+        manage_firewall "del" "$OLD_PORT"
+    fi
+
     if [ "$OS" = "alpine" ]; then
         rc-service hysteria stop || true
         rc-update del hysteria || true
