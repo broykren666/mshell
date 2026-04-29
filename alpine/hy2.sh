@@ -42,6 +42,10 @@ install_hy2() {
     mkdir -p "$WORKDIR"
     read -p "请输入监听端口 (默认40443): " PORT
     PORT=${PORT:-40443}
+    if [[ ! "$PORT" =~ ^[0-9]+$ ]] || [[ "$PORT" -lt 1 ]] || [[ "$PORT" -gt 65535 ]]; then
+        echo -e "${YELLOW}输入无效，将使用默认端口 40443${NC}"
+        PORT=40443
+    fi
     
     local GENPASS
     GENPASS=$(openssl rand -base64 16)
