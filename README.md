@@ -11,10 +11,11 @@
 ## 🚀 快速开始
 
 ### 1. 下载并运行
-在你的服务器上执行以下命令：
+在你的服务器上执行以下命令（推荐使用此方式以支持快捷键）：
 ```bash
-wget -O hy2.sh https://你的脚本路径/hy2.sh && chmod +x hy2.sh && ./hy2.sh
+wget -O hy2.sh https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/hy2.sh && chmod +x hy2.sh && ./hy2.sh
 ```
+*注：Alpine 用户如果提示命令不存在，请先执行 `apk add --no-cache wget bash`*
 
 ### 2. 管理命令
 安装完成后，你可以在任何地方通过输入快捷键直接进入菜单：
