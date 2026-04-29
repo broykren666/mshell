@@ -40,6 +40,9 @@ install_hy2() {
     chmod +x "$BIN"
 
     mkdir -p "$WORKDIR"
+    
+    # 交互输入
+    read -p "请输入绑定的域名 (可选，直接回车使用 IP): " DOMAIN
     read -p "请输入监听端口 (默认40443): " PORT
     PORT=${PORT:-40443}
     if [[ ! "$PORT" =~ ^[0-9]+$ ]] || [[ "$PORT" -lt 1 ]] || [[ "$PORT" -gt 65535 ]]; then
@@ -49,10 +52,15 @@ install_hy2() {
     
     local GENPASS
     GENPASS=$(openssl rand -base64 16)
-    local SNI="www.bing.com"
+    
+    # 确定证书 SNI 和连接地址
+    local IP
+    IP=$(curl -s4 --connect-timeout 5 ip.sb || curl -s4 --connect-timeout 5 icanhazip.com || echo "YOUR_IP")
+    local CONNECT_ADDR="${DOMAIN:-$IP}"
+    local SNI="${DOMAIN:-www.bing.com}"
 
     # 生成证书
-    echo -e "${YELLOW}▶ 正在生成自签名证书...${NC}"
+    echo -e "${YELLOW}▶ 正在生成自签名证书 (SNI: $SNI)...${NC}"
     openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
         -keyout "$WORKDIR/server.key" \
         -out "$WORKDIR/server.crt" \
@@ -93,12 +101,13 @@ EOF
     ln -sf "$(readlink -f "$0")" /usr/local/bin/hy2
     chmod +x /usr/local/bin/hy2
 
-    # 获取 IP
-    local IP
-    IP=$(curl -s4 --connect-timeout 5 ip.sb || curl -s4 --connect-timeout 5 icanhazip.com || echo "YOUR_IP")
-
     echo -e "${GREEN}✅ 安装成功！${NC}"
-    echo -e "📎 节点链接：${YELLOW}hy2://$GENPASS@$IP:$PORT/?sni=$SNI&alpn=h3&insecure=1#Alpine_Hy2${NC}"
+    echo -e "🎲 监听端口：${YELLOW}$PORT${NC}"
+    echo -e "🔐 认证密码：${YELLOW}$GENPASS${NC}"
+    echo -e "🌐 访问地址：${YELLOW}$CONNECT_ADDR${NC}"
+    echo -e ""
+    echo -e "📎 节点链接：${YELLOW}hy2://$GENPASS@$CONNECT_ADDR:$PORT/?sni=$SNI&alpn=h3&insecure=1#Alpine_Hy2${NC}"
+    echo -e ""
     echo -e "${CYAN}💡 以后可输入 ${YELLOW}hy2${CYAN} 快速打开此菜单${NC}"
 }
 
