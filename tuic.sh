@@ -37,9 +37,9 @@ prepare_env() {
         fi
     done
 
-    if [ ${#missing[@]} -ne 0 ]; then
+    if [[ "${#missing[@]}" -ne 0 ]]; then
         echo -e "${YELLOW}▶ 正在安装必要依赖: ${missing[*]}...${NC}"
-        if [ "$OS" = "alpine" ]; then
+        if [[ "$OS" = "alpine" ]]; then
             apk add --no-cache "${missing[@]}"
         else
             apt update && apt install -y "${missing[@]}"
@@ -49,18 +49,18 @@ prepare_env() {
 
 # 防火墙管理
 manage_firewall() {
-    local action=$1
-    local port=$2
+    local action="$1"
+    local port="$2"
     [[ -z "$port" ]] && return
 
     if command -v ufw >/dev/null 2>&1; then
-        if [ "$action" = "add" ]; then
+        if [[ "$action" = "add" ]]; then
             ufw allow "$port"/udp >/dev/null 2>&1
         else
             ufw delete allow "$port"/udp >/dev/null 2>&1
         fi
     elif command -v iptables >/dev/null 2>&1; then
-        if [ "$action" = "add" ]; then
+        if [[ "$action" = "add" ]]; then
             iptables -I INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
         else
             iptables -D INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
@@ -70,30 +70,77 @@ manage_firewall() {
 
 # 重启服务
 restart_service() {
-    if [ "$OS" = "alpine" ]; then
-        rc-service ${SERVICE_NAME} restart
+    if [[ "$OS" = "alpine" ]]; then
+        rc-service "${SERVICE_NAME}" restart
     else
-        systemctl restart ${SERVICE_NAME}
+        systemctl restart "${SERVICE_NAME}"
+    fi
+}
+
+# 查看日志
+view_logs() {
+    echo -e "${YELLOW}▶ 正在查看实时日志 (按 Ctrl+C 退出)...${NC}"
+    if [[ "$OS" = "alpine" ]]; then
+        tail -f /var/log/messages | grep tuic || echo -e "${RED}无法读取日志${NC}"
+    else
+        journalctl -u "${SERVICE_NAME}" -f
+    fi
+}
+
+# BBR 优化尝试
+optimize_bbr() {
+    echo -e "${YELLOW}▶ 正在检测 BBR 状态...${NC}"
+    local current_control
+    current_control=$(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')
+    if [[ "$current_control" == "bbr" ]]; then
+        echo -e "${GREEN}✅ BBR 已经开启${NC}"
+        return
+    fi
+
+    local available
+    available=$(sysctl net.ipv4.tcp_available_congestion_control | grep "bbr" || true)
+    if [[ -z "$available" ]]; then
+        echo -e "${RED}❌ 当前内核不支持 BBR，请先升级内核${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}▶ 尝试开启 BBR...${NC}"
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        local virt
+        virt=$(systemd-detect-virt)
+        [[ "$virt" == "openvz" || "$virt" == "lxc" ]] && echo -e "${RED}⚠️ 检测到容器环境 ($virt)，修改可能失败${NC}"
+    fi
+
+    sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+    echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    
+    if sysctl -p >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ BBR 开启成功！${NC}"
+    else
+        echo -e "${RED}❌ BBR 开启失败，权限不足${NC}"
     fi
 }
 
 # 获取并显示配置信息
 show_info() {
-    if [ ! -f "$CONF" ]; then
+    if [[ ! -f "$CONF" ]]; then
         echo -e "${RED}❌ 配置文件不存在${NC}"
         return
     fi
 
     prepare_env
+    local SERVER_ADDR PORT UUID PASS DOMAIN CERT_PATH INSECURE IP4 IP6
     SERVER_ADDR=$(jq -r '.server' "$CONF")
-    PORT=$(echo $SERVER_ADDR | rev | cut -d: -f1 | rev | sed 's/\]//g')
+    PORT=$(echo "$SERVER_ADDR" | rev | cut -d: -f1 | rev | sed 's/\]//g')
     UUID=$(jq -r '.users | keys[0]' "$CONF")
     PASS=$(jq -r ".users.\"$UUID\"" "$CONF")
     DOMAIN=$(cat "$WORK_DIR/domain.txt" 2>/dev/null || echo "")
 
     # 检测是否使用自签证书
-    local CERT_PATH=$(jq -r '.tls.certificate' "$CONF")
-    local INSECURE="0"
+    CERT_PATH=$(jq -r '.tls.certificate' "$CONF")
+    INSECURE="0"
     [[ "$CERT_PATH" == "$WORK_DIR/"* ]] && INSECURE="1"
     
     echo -e "${YELLOW}正在检测公网 IP 地址...${NC}"
@@ -126,19 +173,20 @@ show_info() {
 
 # 修改端口
 change_port() {
-    if [ ! -f "$CONF" ]; then
+    if [[ ! -f "$CONF" ]]; then
         echo -e "${RED}❌ 请先安装 TUIC${NC}"; return
     fi
     prepare_env
+    local OLD_ADDR OLD_PORT HOST NEW_PORT tmp
     OLD_ADDR=$(jq -r '.server' "$CONF")
-    OLD_PORT=$(echo $OLD_ADDR | rev | cut -d: -f1 | rev | sed 's/\]//g')
-    HOST=$(echo $OLD_ADDR | rev | cut -d: -f2- | rev)
+    OLD_PORT=$(echo "$OLD_ADDR" | rev | cut -d: -f1 | rev | sed 's/\]//g')
+    HOST=$(echo "$OLD_ADDR" | rev | cut -d: -f2- | rev)
     
     echo -e "当前监听端口为: ${YELLOW}$OLD_PORT${NC}"
     read -p "请输入新端口 (回车10000-65535随机): " NEW_PORT
     
     [[ -z "$NEW_PORT" ]] && NEW_PORT=$(( ( RANDOM % 55535 ) + 10000 ))
-    if [[ ! "$NEW_PORT" =~ ^[0-9]+$ ]] || [ "$NEW_PORT" -lt 1 ] || [ "$NEW_PORT" -gt 65535 ]; then
+    if [[ ! "$NEW_PORT" =~ ^[0-9]+$ ]] || [[ "$NEW_PORT" -lt 1 ]] || [[ "$NEW_PORT" -gt 65535 ]]; then
         echo -e "${RED}❌ 输入无效${NC}"; return
     fi
 
@@ -160,6 +208,7 @@ install_tuic() {
     prepare_env
     
     mkdir -p "$WORK_DIR"
+    local ARCH TUIC_ARCH URL BIND_ADDR
     ARCH=$(uname -m)
     case "$ARCH" in
         x86_64) TUIC_ARCH="x86_64" ;;
@@ -169,10 +218,10 @@ install_tuic() {
 
     echo -e "${YELLOW}▶ 下载 TUIC Server ($ARCH)...${NC}"
     URL="https://github.com/Itsusinn/tuic/releases/latest/download/tuic-server-${TUIC_ARCH}-linux-musl"
-    if ! curl -L -o $BIN "$URL"; then
+    if ! curl -L -o "$BIN" "$URL"; then
         echo -e "${RED}❌ 下载失败，请检查网络${NC}"; exit 1
     fi
-    chmod +x $BIN
+    chmod +x "$BIN"
 
     read -p "请输入认证密码 (回车生成随机强密码): " PASS
     [[ -z "$PASS" ]] && PASS=$(openssl rand -hex 12)
@@ -180,7 +229,7 @@ install_tuic() {
 
     read -p "请输入监听端口 (回车10000-65535随机): " PORT
     [[ -z "$PORT" ]] && PORT=$(( ( RANDOM % 55535 ) + 10000 ))
-    if [[ ! "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+    if [[ ! "$PORT" =~ ^[0-9]+$ ]] || [[ "$PORT" -lt 1 ]] || [[ "$PORT" -gt 65535 ]]; then
         PORT=$(( ( RANDOM % 55535 ) + 10000 ))
         echo -e "${YELLOW}输入无效，已分配随机端口: $PORT${NC}"
     fi
@@ -191,6 +240,9 @@ install_tuic() {
     ip -6 addr | grep -q "global" && BIND_ADDR="[::]"
 
     read -p "请输入绑定的域名 (可选, 直接回车使用 IP): " DOMAIN
+    read -p "请输入伪装 SNI (回车默认 www.bing.com): " CUSTOM_SNI
+    [[ -z "$CUSTOM_SNI" ]] && CUSTOM_SNI="www.bing.com"
+
     local USE_CUSTOM_CERT="n"
     local CERT_FILE_PATH="$WORK_DIR/cert.pem"
     local KEY_FILE_PATH="$WORK_DIR/key.pem"
@@ -217,12 +269,12 @@ install_tuic() {
         echo -e "${YELLOW}▶ 生成自签证书...${NC}"
         openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
             -keyout "$WORK_DIR/key.pem" -out "$WORK_DIR/cert.pem" \
-            -subj "/CN=${DOMAIN:-www.bing.com}" -days 3650 -nodes 2>/dev/null
+            -subj "/CN=${DOMAIN:-$CUSTOM_SNI}" -days 3650 -nodes 2>/dev/null
         CERT_FILE_PATH="$WORK_DIR/cert.pem"
         KEY_FILE_PATH="$WORK_DIR/key.pem"
     fi
 
-    cat > $CONF <<EOF
+    cat > "$CONF" <<EOF
 {
   "server": "${BIND_ADDR}:${PORT}",
   "users": {
@@ -243,8 +295,8 @@ EOF
     manage_firewall "add" "$PORT"
 
     # 服务部署
-    if [ "$OS" = "alpine" ]; then
-        cat > /etc/init.d/${SERVICE_NAME} <<EOF
+    if [[ "$OS" = "alpine" ]]; then
+        cat > "/etc/init.d/${SERVICE_NAME}" <<EOF
 #!/sbin/openrc-run
 description="TUIC Server"
 command="${BIN}"
@@ -256,10 +308,10 @@ depend() {
     need net
 }
 EOF
-        chmod +x /etc/init.d/${SERVICE_NAME}
-        rc-update add ${SERVICE_NAME} default
+        chmod +x "/etc/init.d/${SERVICE_NAME}"
+        rc-update add "${SERVICE_NAME}" default
     else
-        cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
+        cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=TUIC Server
 After=network.target
@@ -271,7 +323,7 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
         systemctl daemon-reload
-        systemctl enable ${SERVICE_NAME}
+        systemctl enable "${SERVICE_NAME}"
     fi
 
     # 配置快捷命令
@@ -294,19 +346,20 @@ uninstall_tuic() {
     # 清理快捷命令
     rm -f /usr/local/bin/tuic
     # 清理防火墙
-    if [ -f "$PORT_FILE" ]; then
+    if [[ -f "$PORT_FILE" ]]; then
+        local OLD_PORT
         OLD_PORT=$(cat "$PORT_FILE")
         manage_firewall "del" "$OLD_PORT"
     fi
 
-    if [ "$OS" = "alpine" ]; then
-        rc-service ${SERVICE_NAME} stop || true
-        rc-update del ${SERVICE_NAME} || true
-        rm -f /etc/init.d/${SERVICE_NAME}
+    if [[ "$OS" = "alpine" ]]; then
+        rc-service "${SERVICE_NAME}" stop || true
+        rc-update del "${SERVICE_NAME}" || true
+        rm -f "/etc/init.d/${SERVICE_NAME}"
     else
-        systemctl stop ${SERVICE_NAME} || true
-        systemctl disable ${SERVICE_NAME} || true
-        rm -f /etc/systemd/system/${SERVICE_NAME}.service
+        systemctl stop "${SERVICE_NAME}" || true
+        systemctl disable "${SERVICE_NAME}" || true
+        rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
         systemctl daemon-reload
     fi
     rm -rf "$WORK_DIR"
@@ -342,14 +395,14 @@ IP6_MAIN=$(curl -s6 --connect-timeout 2 ip.sb || curl -s6 --connect-timeout 2 ic
 
 while true; do
 # 状态检测逻辑
-if [ "$OS" = "alpine" ]; then
-    if rc-service ${SERVICE_NAME} status 2>/dev/null | grep -q "started"; then
+if [[ "$OS" = "alpine" ]]; then
+    if rc-service "${SERVICE_NAME}" status 2>/dev/null | grep -q "started"; then
         STATUS="${GREEN}正在运行${NC}"
     else
         STATUS="${RED}未安装或未运行${NC}"
     fi
 else
-    if systemctl is-active --quiet ${SERVICE_NAME} 2>/dev/null; then
+    if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         STATUS="${GREEN}正在运行${NC}"
     else
         STATUS="${RED}未安装或未运行${NC}"
@@ -368,12 +421,14 @@ echo -e "${GREEN}===============================================${NC}"
 echo -e "  ${CYAN}[1]${NC}  安装 TUIC"
 echo -e "  ${CYAN}[2]${NC}  查看配置节点链接"
 echo -e "  ${CYAN}[3]${NC}  更改监听端口"
-echo -e "  ${CYAN}[4]${NC}  重启服务"
-echo -e "  ${CYAN}[5]${NC}  卸载 TUIC"
-echo -e "  ${CYAN}[6]${NC}  更新管理脚本"
+echo -e "  ${CYAN}[4]${NC}  查看实时日志"
+echo -e "  ${CYAN}[5]${NC}  优化 BBR 加速"
+echo -e "  ${CYAN}[6]${NC}  重启服务"
+echo -e "  ${CYAN}[7]${NC}  卸载 TUIC"
+echo -e "  ${CYAN}[8]${NC}  更新管理脚本"
 echo -e "  ${CYAN}[0]${NC}  退出脚本"
 echo -e "${GREEN}===============================================${NC}"
-echo -ne "请输入数字选择 [0-6]: "
+echo -ne "请输入数字选择 [0-8]: "
 read choice
 
 case $choice in
@@ -387,12 +442,18 @@ case $choice in
             change_port
             ;;
         4)
-            restart_service && echo -e "${GREEN}服务已重启${NC}"
+            view_logs
             ;;
         5)
-            uninstall_tuic
+            optimize_bbr
             ;;
         6)
+            restart_service && echo -e "${GREEN}服务已重启${NC}"
+            ;;
+        7)
+            uninstall_tuic
+            ;;
+        8)
             update_script
             ;;
         0)
