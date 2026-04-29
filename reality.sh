@@ -311,6 +311,28 @@ uninstall_reality() {
     echo -e "${GREEN}✅ 卸载成功${NC}"
 }
 
+# 更新脚本
+update_script() {
+    echo -e "${YELLOW}▶ 正在从 GitHub 检查更新...${NC}"
+    local url="https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/reality.sh"
+    local tmp_file="/tmp/reality_update.sh"
+    
+    if curl -sL -o "$tmp_file" "$url"; then
+        if grep -q "#!/usr/bin/env bash" "$tmp_file"; then
+            mv "$tmp_file" "$(readlink -f "$0")"
+            chmod +x "$(readlink -f "$0")"
+            echo -e "${GREEN}✅ 脚本已更新为最新版本，正在重新启动...${NC}"
+            sleep 1
+            exec bash "$(readlink -f "$0")"
+        else
+            echo -e "${RED}❌ 更新失败：下载内容无效${NC}"
+            rm -f "$tmp_file"
+        fi
+    else
+        echo -e "${RED}❌ 网络连接失败，请检查网络后再试${NC}"
+    fi
+}
+
 while true; do
 # 状态检测逻辑
 if [ "$OS" = "alpine" ]; then
@@ -339,9 +361,10 @@ echo -e "  ${CYAN}[2]${NC}  查看配置节点链接"
 echo -e "  ${CYAN}[3]${NC}  更改监听端口"
 echo -e "  ${CYAN}[4]${NC}  重启服务"
 echo -e "  ${CYAN}[5]${NC}  卸载 VLESS-REALITY"
+echo -e "  ${CYAN}[6]${NC}  更新管理脚本"
 echo -e "  ${CYAN}[0]${NC}  退出脚本"
 echo -e "${GREEN}===============================================${NC}"
-echo -ne "请输入数字选择 [0-5]: "
+echo -ne "请输入数字选择 [0-6]: "
 read choice
 
 case $choice in
@@ -359,6 +382,9 @@ case $choice in
             ;;
         5)
             uninstall_reality
+            ;;
+        6)
+            update_script
             ;;
         0)
             exit 0
