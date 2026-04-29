@@ -123,10 +123,21 @@ uninstall_hy2() {
     echo -e "${GREEN}✅ 卸载完成${NC}"
 }
 
+# 获取 IP
+get_ip() {
+    local ip4 ip6
+    ip4=$(curl -s4 --connect-timeout 2 ip.sb || curl -s4 --connect-timeout 2 icanhazip.com || echo "未检测到")
+    ip6=$(curl -s6 --connect-timeout 2 ip.sb || curl -s6 --connect-timeout 2 icanhazip.com || echo "未检测到")
+    echo -e "  IPv4 地址: ${YELLOW}$ip4${NC}"
+    echo -e "  IPv6 地址: ${YELLOW}$ip6${NC}"
+}
+
 # 菜单循环
 while true; do
+    clear
     echo -e "${GREEN}===============================================${NC}"
     echo -e "      Hysteria2 Alpine 专版管理脚本"
+    get_ip
     echo -e "${GREEN}===============================================${NC}"
     echo -e "  ${CYAN}[1]${NC} 安装 Hysteria2"
     echo -e "  ${CYAN}[2]${NC} 重启服务"
