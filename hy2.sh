@@ -155,7 +155,14 @@ install_hy2() {
     chmod +x "$BIN"
 
     PASSWORD=$(openssl rand -hex 4)
-    PORT=$(( ( RANDOM % 55535 ) + 10000 ))
+    
+    read -p "请输入监听端口 (回车10000-65535随机): " PORT
+    [[ -z "$PORT" ]] && PORT=$(( ( RANDOM % 55535 ) + 10000 ))
+    if [[ ! "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+        PORT=$(( ( RANDOM % 55535 ) + 10000 ))
+        echo -e "${YELLOW}输入无效，已分配随机端口: $PORT${NC}"
+    fi
+
     echo "$PASSWORD" > "$PASS_FILE"
     echo "$PORT" > "$PORT_FILE"
 
