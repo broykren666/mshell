@@ -93,7 +93,7 @@ manage_firewall() {
 # 实时日志
 view_logs() {
     echo -e "${YELLOW}▶ 正在查看实时日志 (Ctrl+C 退出)...${NC}"
-    tail -f /var/log/messages 2>/dev/null | grep --line-buffered hysteria || echo -e "${RED}❌ 暂无日志记录${NC}"
+    tail -f /var/log/messages 2>/dev/null | grep hysteria || echo -e "${RED}❌ 暂无日志记录${NC}"
 }
 
 # 配置导出
