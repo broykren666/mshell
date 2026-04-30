@@ -1,5 +1,5 @@
 #!/bin/sh
-# Hysteria2 Alpine 专版管理脚本 - 兼容版
+# Hysteria2 Alpine 专版管理脚本 - 兼容修复版
 set -e
 
 # 颜色定义
@@ -126,16 +126,21 @@ install_hy2() {
     read -p "请输入域名 (回车跳过): " DOMAIN
     read -p "请输入端口 (默认40443): " PORT
     PORT=${PORT:-40443}
-    ! echo "$PORT" | grep -qE '^[0-9]+$' && PORT=40443
+    if ! echo "$PORT" | grep -qE '^[0-9]+$'; then
+        PORT=40443
+    fi
     
     GENPASS=$(openssl rand -base64 16)
     get_ip_cache
     SNI="${DOMAIN:-www.bing.com}"
 
     echo -e "${YELLOW}▶ 生成 ECC 证书...${NC}"
-    openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
+    # 修复：Alpine sh 不支持 <() 语法，改用分步生成
+    openssl ecparam -name prime256v1 -out "$WORKDIR/param.pem"
+    openssl req -x509 -nodes -newkey ec:"$WORKDIR/param.pem" \
         -keyout "$WORKDIR/server.key" -out "$WORKDIR/server.crt" \
         -subj "/CN=$SNI" -days 3650 2>/dev/null
+    rm -f "$WORKDIR/param.pem"
 
     cat << EOF > "$CONF"
 listen: :$PORT
