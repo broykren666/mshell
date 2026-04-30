@@ -83,7 +83,11 @@ restart_service() {
 view_logs() {
     echo -e "${YELLOW}▶ 正在查看实时日志 (按 Ctrl+C 退出)...${NC}"
     if [[ "$OS" = "alpine" ]]; then
-        tail -f /var/log/messages | grep hysteria || echo -e "${RED}无法读取日志${NC}"
+        if [[ -f /var/log/hysteria.log ]]; then
+            tail -f /var/log/hysteria.log
+        else
+            tail -f /var/log/messages | grep --line-buffered hysteria || echo -e "${RED}无法读取日志${NC}"
+        fi
     else
         journalctl -u hysteria -f
     fi
@@ -135,9 +139,18 @@ show_info() {
     prepare_env
     local PORT PASSWORD DOMAIN CERT_PATH INSECURE IP4 IP6
     
+    # 从配置文件读取信息
+    PORT=$(jq -r '.listen' "$CONF" | grep -o '[0-9]\+')
+    PASSWORD=$(jq -r '.auth.password' "$CONF")
+    local SNI=$(jq -r '.masquerade.proxy.url' "$CONF" | sed 's/https:\/\///')
+    
+    if [[ -f "$WORKDIR/domain.txt" ]]; then
+        DOMAIN=$(cat "$WORKDIR/domain.txt")
+    fi
+
     # 检测是否使用自签证书 (简单判断: 如果证书在 WORKDIR 下则视为自签)
-    local CERT_PATH=$(jq -r '.tls.cert' "$CONF")
-    local INSECURE="0"
+    CERT_PATH=$(jq -r '.tls.cert' "$CONF")
+    INSECURE="0"
     [[ "$CERT_PATH" == "$WORKDIR/"* ]] && INSECURE="1"
 
     echo -e "${YELLOW}正在检测公网 IP 地址...${NC}"
@@ -146,6 +159,7 @@ show_info() {
 
     echo -e "\n${GREEN}========== Hysteria2 配置信息 ==========${NC}"
     [[ -n "$DOMAIN" ]] && echo -e "🌐 绑定域名: ${YELLOW}$DOMAIN${NC}"
+    echo -e "🎭 伪装域名: ${YELLOW}$SNI${NC}"
     echo -e "📌 IPv4地址: ${YELLOW}$IP4${NC}"
     echo -e "📌 IPv6地址: ${YELLOW}$IP6${NC}"
     echo -e "🎲 监听端口: ${YELLOW}$PORT${NC}"
@@ -156,8 +170,8 @@ show_info() {
     # 如果是 IPv6 且不是域名，需要加方括号
     [[ -z "$DOMAIN" && -n "$IP6" ]] && ADDR_V6="[$IP6]"
 
-    [[ -n "$IP4" || -n "$DOMAIN" ]] && echo -e "\n${GREEN}📎 节点链接 (IPv4/Domain):${NC}\n${YELLOW}hy2://$PASSWORD@$ADDR_V4:$PORT/?sni=${DOMAIN:-$SERVER_NAME}&alpn=h3&insecure=$INSECURE#${TAG}_V4${NC}"
-    [[ -n "$IP6" && -z "$DOMAIN" ]] && echo -e "\n${GREEN}📎 节点链接 (IPv6):${NC}\n${YELLOW}hy2://$PASSWORD@$ADDR_V6:$PORT/?sni=$SERVER_NAME&alpn=h3&insecure=$INSECURE#${TAG}_V6${NC}"
+    [[ -n "$IP4" || -n "$DOMAIN" ]] && echo -e "\n${GREEN}📎 节点链接 (IPv4/Domain):${NC}\n${YELLOW}hy2://$PASSWORD@$ADDR_V4:$PORT/?sni=$SNI&alpn=h3&insecure=$INSECURE#${TAG}_V4${NC}"
+    [[ -n "$IP6" && -z "$DOMAIN" ]] && echo -e "\n${GREEN}📎 节点链接 (IPv6):${NC}\n${YELLOW}hy2://$PASSWORD@$ADDR_V6:$PORT/?sni=$SNI&alpn=h3&insecure=$INSECURE#${TAG}_V6${NC}"
     
     if [[ -z "$IP4" && -z "$IP6" && -z "$DOMAIN" ]]; then
         echo -e "${RED}❌ 无法检测到公网 IP 或域名${NC}"
@@ -192,6 +206,62 @@ change_port() {
     restart_service
     echo -e "${GREEN}✅ 端口已更改为 $NEW_PORT${NC}"
     show_info
+}
+
+# 更改伪装域名/绑定域名
+change_domain() {
+    if [[ ! -f "$CONF" ]]; then
+        echo -e "${RED}❌ 请先安装 Hysteria2${NC}"; return
+    fi
+    prepare_env
+    
+    local OLD_SNI=$(jq -r '.masquerade.proxy.url' "$CONF" | sed 's/https:\/\///')
+    local OLD_DOMAIN=""
+    [[ -f "$WORKDIR/domain.txt" ]] && OLD_DOMAIN=$(cat "$WORKDIR/domain.txt")
+    
+    echo -e "当前伪装域名 (SNI): ${YELLOW}$OLD_SNI${NC}"
+    [[ -n "$OLD_DOMAIN" ]] && echo -e "当前绑定域名: ${YELLOW}$OLD_DOMAIN${NC}"
+    
+    echo -e "${CYAN}请选择操作:${NC}"
+    echo -e "1. 仅修改伪装域名 (SNI)"
+    echo -e "2. 修改绑定域名和自签证书"
+    read -p "请输入选择 [1-2] (回车取消): " DOMAIN_OPTS
+    
+    if [[ "$DOMAIN_OPTS" == "1" ]]; then
+        read -p "请输入新的伪装域名 (回车取消): " NEW_SNI
+        [[ -z "$NEW_SNI" ]] && return
+        
+        jq --arg sni "https://$NEW_SNI" '.masquerade.proxy.url = $sni' "$CONF" > "$CONF.tmp" && mv "$CONF.tmp" "$CONF"
+        
+        # 判断如果是自签证书，可能需要重新生成
+        local CERT_PATH=$(jq -r '.tls.cert' "$CONF")
+        if [[ "$CERT_PATH" == "$WORKDIR/"* ]]; then
+            echo -e "${YELLOW}▶ 更新自签证书以匹配新 SNI...${NC}"
+            openssl req -x509 -nodes -newkey rsa:2048 -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" -days 3650 -subj "/CN=$NEW_SNI" 2>/dev/null
+        fi
+        
+        restart_service
+        echo -e "${GREEN}✅ 伪装域名已更改为 $NEW_SNI${NC}"
+        show_info
+    elif [[ "$DOMAIN_OPTS" == "2" ]]; then
+        read -p "请输入新的绑定域名 (回车清空绑定域名): " NEW_DOMAIN
+        if [[ -z "$NEW_DOMAIN" ]]; then
+            rm -f "$WORKDIR/domain.txt"
+        else
+            echo "$NEW_DOMAIN" > "$WORKDIR/domain.txt"
+            # 同样更新 SNI 并生成新证书
+            jq --arg sni "https://$NEW_DOMAIN" '.masquerade.proxy.url = $sni' "$CONF" > "$CONF.tmp" && mv "$CONF.tmp" "$CONF"
+            
+            local CERT_PATH=$(jq -r '.tls.cert' "$CONF")
+            if [[ "$CERT_PATH" == "$WORKDIR/"* ]]; then
+                echo -e "${YELLOW}▶ 生成对应新域名的自签证书...${NC}"
+                openssl req -x509 -nodes -newkey rsa:2048 -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" -days 3650 -subj "/CN=$NEW_DOMAIN" 2>/dev/null
+            fi
+        fi
+        restart_service
+        echo -e "${GREEN}✅ 域名配置已更新${NC}"
+        show_info
+    fi
 }
 
 # 安装
@@ -298,6 +368,8 @@ command_args="server -c $CONF"
 command_background=true
 pidfile="/run/hysteria.pid"
 supervisor="supervise-daemon"
+output_log="/var/log/hysteria.log"
+error_log="/var/log/hysteria.log"
 EOF
         chmod +x /etc/init.d/hysteria
         rc-update add hysteria default
@@ -413,14 +485,15 @@ echo -e "${GREEN}===============================================${NC}"
 echo -e "  ${CYAN}[1]${NC}  安装 Hysteria2"
 echo -e "  ${CYAN}[2]${NC}  查看配置节点链接"
 echo -e "  ${CYAN}[3]${NC}  更改监听端口"
-echo -e "  ${CYAN}[4]${NC}  查看实时日志"
-echo -e "  ${CYAN}[5]${NC}  优化 BBR 加速"
-echo -e "  ${CYAN}[6]${NC}  重启服务"
-echo -e "  ${CYAN}[7]${NC}  卸载 Hysteria2"
-echo -e "  ${CYAN}[8]${NC}  更新管理脚本"
+echo -e "  ${CYAN}[4]${NC}  修改伪装域名/绑定域名"
+echo -e "  ${CYAN}[5]${NC}  查看实时日志"
+echo -e "  ${CYAN}[6]${NC}  优化 BBR 加速"
+echo -e "  ${CYAN}[7]${NC}  重启服务"
+echo -e "  ${CYAN}[8]${NC}  卸载 Hysteria2"
+echo -e "  ${CYAN}[9]${NC}  更新管理脚本"
 echo -e "  ${CYAN}[0]${NC}  退出脚本"
 echo -e "${GREEN}===============================================${NC}"
-echo -ne "请输入数字选择 [0-8]: "
+echo -ne "请输入数字选择 [0-9]: "
 read choice
 
 case $choice in
@@ -434,18 +507,21 @@ case $choice in
             change_port
             ;;
         4)
-            view_logs
+            change_domain
             ;;
         5)
-            optimize_bbr
+            view_logs
             ;;
         6)
-            restart_service && echo -e "${GREEN}服务已重启${NC}"
+            optimize_bbr
             ;;
         7)
-            uninstall_hy2
+            restart_service && echo -e "${GREEN}服务已重启${NC}"
             ;;
         8)
+            uninstall_hy2
+            ;;
+        9)
             update_script
             ;;
         0)
