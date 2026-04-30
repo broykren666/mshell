@@ -235,6 +235,28 @@ uninstall_hy2() {
     echo -e "${GREEN}✅ 卸载干净了${NC}"
 }
 
+# 更新脚本
+update_script() {
+    echo -e "${YELLOW}▶ 正在从 GitHub 检查更新...${NC}"
+    local url="https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/alpine/hy2.sh"
+    local tmp_file="/tmp/hy2_update.sh"
+    
+    if curl -sL -o "$tmp_file" "$url"; then
+        if grep -q "#!/bin/sh" "$tmp_file"; then
+            mv "$tmp_file" "$(readlink -f "$0")"
+            chmod +x "$(readlink -f "$0")"
+            echo -e "${GREEN}✅ 脚本已更新为最新版本，正在重新启动...${NC}"
+            sleep 1
+            exec sh "$(readlink -f "$0")"
+        else
+            echo -e "${RED}❌ 更新失败：下载内容无效${NC}"
+            rm -f "$tmp_file"
+        fi
+    else
+        echo -e "${RED}❌ 网络连接失败，请检查网络后再试${NC}"
+    fi
+}
+
 # 主菜单循环
 while true; do
     clear
@@ -250,9 +272,10 @@ while true; do
     echo -e "  ${CYAN}[4]${NC} 实时日志"
     echo -e "  ${CYAN}[5]${NC} 重启服务"
     echo -e "  ${CYAN}[6]${NC} 彻底卸载"
+    echo -e "  ${CYAN}[7]${NC} 更新管理脚本"
     echo -e "  ${CYAN}[0]${NC} 退出脚本"
     echo -e "${GREEN}===============================================${NC}"
-    read -p "选择操作 [0-6]: " choice
+    read -p "选择操作 [0-7]: " choice
     case "$choice" in
         1) install_hy2 ;;
         2) show_config ;;
@@ -260,6 +283,7 @@ while true; do
         4) view_logs ;;
         5) service hysteria restart; echo -e "${GREEN}已重启${NC}" ;;
         6) uninstall_hy2 ;;
+        7) update_script ;;
         0) exit 0 ;;
         *) echo -e "${RED}输入错误${NC}" ;;
     esac
