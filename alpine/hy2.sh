@@ -1,5 +1,5 @@
 #!/bin/sh
-# Hysteria2 Alpine 专版管理脚本 - 兼容修复版
+# Hysteria2 Alpine 专版管理脚本 - 完美兼容版
 set -e
 
 # 颜色定义
@@ -16,7 +16,10 @@ IP4_CACHE=""
 IP6_CACHE=""
 
 # 权限校验
-[ "$(id -u)" != "0" ] && { echo -e "${RED}❌ 请使用 root 运行${NC}"; exit 1; }
+if [ "$(id -u)" != "0" ]; then
+    echo -e "${RED}❌ 请使用 root 运行${NC}"
+    exit 1
+fi
 
 # 依赖检查
 prepare_env() {
@@ -40,8 +43,12 @@ get_arch() {
 
 # 高性能 IP 缓存
 get_ip_cache() {
-    [ -z "$IP4_CACHE" ] || [ "$IP4_CACHE" = "未检测到" ] && IP4_CACHE=$(curl -s4 --connect-timeout 2 ip.sb || curl -s4 --connect-timeout 2 icanhazip.com || echo "未检测到")
-    [ -z "$IP6_CACHE" ] || [ "$IP6_CACHE" = "未检测到" ] && IP6_CACHE=$(curl -s6 --connect-timeout 2 ip.sb || curl -s6 --connect-timeout 2 icanhazip.com || echo "未检测到")
+    if [ -z "$IP4_CACHE" ] || [ "$IP4_CACHE" = "未检测到" ]; then
+        IP4_CACHE=$(curl -s4 --connect-timeout 2 ip.sb || curl -s4 --connect-timeout 2 icanhazip.com || echo "未检测到")
+    fi
+    if [ -z "$IP6_CACHE" ] || [ "$IP6_CACHE" = "未检测到" ]; then
+        IP6_CACHE=$(curl -s6 --connect-timeout 2 ip.sb || curl -s6 --connect-timeout 2 icanhazip.com || echo "未检测到")
+    fi
 }
 
 # BBR 探测
@@ -56,11 +63,21 @@ get_bbr_status() {
 # 自动化防火墙
 manage_firewall() {
     local action="$1" port="$2"
-    [ -z "$port" ] && return
+    if [ -z "$port" ]; then
+        return
+    fi
     if command -v ufw >/dev/null 2>&1; then
-        [ "$action" = "add" ] && ufw allow "$port"/udp >/dev/null 2>&1 || ufw delete allow "$port"/udp >/dev/null 2>&1
+        if [ "$action" = "add" ]; then
+            ufw allow "$port"/udp >/dev/null 2>&1 || true
+        else
+            ufw delete allow "$port"/udp >/dev/null 2>&1 || true
+        fi
     elif command -v iptables >/dev/null 2>&1; then
-        [ "$action" = "add" ] && iptables -I INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || iptables -D INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
+        if [ "$action" = "add" ]; then
+            iptables -I INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || true
+        else
+            iptables -D INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || true
+        fi
     fi
 }
 
@@ -82,7 +99,9 @@ show_config() {
     
     get_ip_cache
     addr="${IP4_CACHE}"
-    [ "$addr" = "未检测到" ] && addr="YOUR_IP"
+    if [ "$addr" = "未检测到" ]; then
+        addr="YOUR_IP"
+    fi
 
     echo -e "${GREEN}========== Hysteria2 配置详情 ==========${NC}"
     echo -e "端口: ${YELLOW}$port${NC} | 密码: ${YELLOW}$pass${NC}"
@@ -114,9 +133,12 @@ change_port() {
 # 安装流程
 install_hy2() {
     prepare_env
-    local FILE arch PORT GENPASS SNI IP CONNECT_ADDR
+    local FILE arch PORT GENPASS SNI CONNECT_ADDR
     FILE=$(get_arch)
-    [ -z "$FILE" ] && { echo -e "${RED}❌ 不支持的架构${NC}"; return; }
+    if [ -z "$FILE" ]; then
+        echo -e "${RED}❌ 不支持的架构${NC}"
+        return
+    fi
 
     echo -e "${YELLOW}▶ 正在下载最新版 Hysteria2...${NC}"
     wget -O "$BIN" "https://download.hysteria.network/app/latest/$FILE" --no-check-certificate
@@ -135,7 +157,6 @@ install_hy2() {
     SNI="${DOMAIN:-www.bing.com}"
 
     echo -e "${YELLOW}▶ 生成 ECC 证书...${NC}"
-    # 修复：Alpine sh 不支持 <() 语法，改用分步生成
     openssl ecparam -name prime256v1 -out "$WORKDIR/param.pem"
     openssl req -x509 -nodes -newkey ec:"$WORKDIR/param.pem" \
         -keyout "$WORKDIR/server.key" -out "$WORKDIR/server.crt" \
@@ -170,7 +191,7 @@ EOF
     chmod +x /etc/init.d/hysteria
     manage_firewall "add" "$PORT"
     rc-update add hysteria default
-    service hysteria restart
+    service hysteria restart || true
 
     ln -sf "$(readlink -f "$0")" /usr/local/bin/hy2
     chmod +x /usr/local/bin/hy2
@@ -184,7 +205,9 @@ uninstall_hy2() {
     echo -e "${YELLOW}▶ 正在彻底清理 Hysteria2...${NC}"
     local port
     port=$(grep "listen:" "$CONF" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' | sed 's/://g')
-    [ -n "$port" ] && manage_firewall "del" "$port"
+    if [ -n "$port" ]; then
+        manage_firewall "del" "$port"
+    fi
     service hysteria stop 2>/dev/null || true
     rc-update del hysteria default 2>/dev/null || true
     rm -f /etc/init.d/hysteria /usr/local/bin/hy2 "$BIN" 2>/dev/null
