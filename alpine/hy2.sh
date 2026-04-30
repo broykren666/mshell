@@ -95,12 +95,22 @@ show_config() {
     local port pass sni addr
     port=$(grep "listen:" "$CONF" | awk '{print $2}' | tr -d '[:space:]' | sed 's/://g')
     pass=$(grep "password:" "$CONF" | awk '{print $2}' | tr -d '[:space:]')
-    sni=$(openssl x509 -noout -subject -in "$WORKDIR/server.crt" 2>/dev/null | sed -n 's/.*CN = //p' || echo "www.bing.com")
     
-    get_ip_cache
-    addr="${IP4_CACHE}"
-    if [ "$addr" = "未检测到" ]; then
-        addr="YOUR_IP"
+    # 兼容不同 OpenSSL 版本的 CN 提取 (处理有无空格的情况)
+    sni=$(openssl x509 -noout -subject -in "$WORKDIR/server.crt" 2>/dev/null | sed 's/.*CN[ =]*//' | tr -d '[:space:]')
+    if [ -z "$sni" ]; then
+        sni="www.bing.com"
+    fi
+    
+    # 如果检测到绑定了域名，优先使用域名作为链接地址
+    if [ "$sni" != "www.bing.com" ] && [ "$sni" != "bing.com" ]; then
+        addr="$sni"
+    else
+        get_ip_cache
+        addr="${IP4_CACHE}"
+        if [ "$addr" = "未检测到" ]; then
+            addr="YOUR_IP"
+        fi
     fi
 
     echo -e "${GREEN}========== Hysteria2 配置详情 ==========${NC}"
@@ -174,7 +184,7 @@ auth:
 masquerade:
   type: proxy
   proxy:
-    url: https://bing.com/
+    url: https://$SNI/
     rewriteHost: true
 EOF
 
