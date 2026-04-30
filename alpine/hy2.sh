@@ -1,13 +1,13 @@
-#!/bin/bash
-# Hysteria2 Alpine 专版管理脚本 - 最终稳定版
+#!/bin/sh
+# Hysteria2 Alpine 专版管理脚本 - 兼容版
 set -e
 
 # 颜色定义
-GREEN='\e[32m'
-RED='\e[31m'
-YELLOW='\e[33m'
-CYAN='\e[36m'
-NC='\e[0m'
+GREEN='\033[32m'
+RED='\033[31m'
+YELLOW='\033[33m'
+CYAN='\033[36m'
+NC='\033[0m'
 
 WORKDIR="/etc/hysteria"
 BIN="/usr/local/bin/hysteria"
@@ -16,7 +16,7 @@ IP4_CACHE=""
 IP6_CACHE=""
 
 # 权限校验
-[[ "$(id -u)" != "0" ]] && { echo -e "${RED}❌ 请使用 root 运行${NC}"; exit 1; }
+[ "$(id -u)" != "0" ] && { echo -e "${RED}❌ 请使用 root 运行${NC}"; exit 1; }
 
 # 依赖检查
 prepare_env() {
@@ -40,8 +40,8 @@ get_arch() {
 
 # 高性能 IP 缓存
 get_ip_cache() {
-    [[ -z "$IP4_CACHE" || "$IP4_CACHE" == "未检测到" ]] && IP4_CACHE=$(curl -s4 --connect-timeout 2 ip.sb || curl -s4 --connect-timeout 2 icanhazip.com || echo "未检测到")
-    [[ -z "$IP6_CACHE" || "$IP6_CACHE" == "未检测到" ]] && IP6_CACHE=$(curl -s6 --connect-timeout 2 ip.sb || curl -s6 --connect-timeout 2 icanhazip.com || echo "未检测到")
+    [ -z "$IP4_CACHE" ] || [ "$IP4_CACHE" = "未检测到" ] && IP4_CACHE=$(curl -s4 --connect-timeout 2 ip.sb || curl -s4 --connect-timeout 2 icanhazip.com || echo "未检测到")
+    [ -z "$IP6_CACHE" ] || [ "$IP6_CACHE" = "未检测到" ] && IP6_CACHE=$(curl -s6 --connect-timeout 2 ip.sb || curl -s6 --connect-timeout 2 icanhazip.com || echo "未检测到")
 }
 
 # BBR 探测
@@ -56,11 +56,11 @@ get_bbr_status() {
 # 自动化防火墙
 manage_firewall() {
     local action="$1" port="$2"
-    [[ -z "$port" ]] && return
+    [ -z "$port" ] && return
     if command -v ufw >/dev/null 2>&1; then
-        [[ "$action" == "add" ]] && ufw allow "$port"/udp >/dev/null 2>&1 || ufw delete allow "$port"/udp >/dev/null 2>&1
+        [ "$action" = "add" ] && ufw allow "$port"/udp >/dev/null 2>&1 || ufw delete allow "$port"/udp >/dev/null 2>&1
     elif command -v iptables >/dev/null 2>&1; then
-        [[ "$action" == "add" ]] && iptables -I INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || iptables -D INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
+        [ "$action" = "add" ] && iptables -I INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null || iptables -D INPUT -p udp --dport "$port" -j ACCEPT 2>/dev/null
     fi
 }
 
@@ -72,17 +72,17 @@ view_logs() {
 
 # 配置导出
 show_config() {
-    if [[ ! -f "$CONF" ]]; then
+    if [ ! -f "$CONF" ]; then
         echo -e "${RED}❌ 未检测到安装记录${NC}"; return
     fi
-    local port pass sni
+    local port pass sni addr
     port=$(grep "listen:" "$CONF" | awk '{print $2}' | tr -d '[:space:]' | sed 's/://g')
     pass=$(grep "password:" "$CONF" | awk '{print $2}' | tr -d '[:space:]')
     sni=$(openssl x509 -noout -subject -in "$WORKDIR/server.crt" 2>/dev/null | sed -n 's/.*CN = //p' || echo "www.bing.com")
     
     get_ip_cache
-    local addr="${IP4_CACHE}"
-    [[ "$addr" == "未检测到" ]] && addr="YOUR_IP"
+    addr="${IP4_CACHE}"
+    [ "$addr" = "未检测到" ] && addr="YOUR_IP"
 
     echo -e "${GREEN}========== Hysteria2 配置详情 ==========${NC}"
     echo -e "端口: ${YELLOW}$port${NC} | 密码: ${YELLOW}$pass${NC}"
@@ -93,14 +93,14 @@ show_config() {
 
 # 动态修改端口
 change_port() {
-    if [[ ! -f "$CONF" ]]; then
+    if [ ! -f "$CONF" ]; then
         echo -e "${RED}❌ 尚未安装 Hysteria2${NC}"; return
     fi
     local old_port new_port
     old_port=$(grep "listen:" "$CONF" | awk '{print $2}' | tr -d '[:space:]' | sed 's/://g')
     echo -e "当前端口为: ${YELLOW}$old_port${NC}"
     read -p "请输入新端口 (1-65535): " new_port
-    if [[ ! "$new_port" =~ ^[0-9]+$ ]] || [[ "$new_port" -lt 1 ]] || [[ "$new_port" -gt 65535 ]]; then
+    if ! echo "$new_port" | grep -qE '^[0-9]+$' || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
         echo -e "${RED}❌ 无效端口${NC}"; return
     fi
 
@@ -114,9 +114,9 @@ change_port() {
 # 安装流程
 install_hy2() {
     prepare_env
-    local FILE
+    local FILE arch PORT GENPASS SNI IP CONNECT_ADDR
     FILE=$(get_arch)
-    [[ -z "$FILE" ]] && { echo -e "${RED}❌ 不支持的架构${NC}"; return; }
+    [ -z "$FILE" ] && { echo -e "${RED}❌ 不支持的架构${NC}"; return; }
 
     echo -e "${YELLOW}▶ 正在下载最新版 Hysteria2...${NC}"
     wget -O "$BIN" "https://download.hysteria.network/app/latest/$FILE" --no-check-certificate
@@ -126,11 +126,11 @@ install_hy2() {
     read -p "请输入域名 (回车跳过): " DOMAIN
     read -p "请输入端口 (默认40443): " PORT
     PORT=${PORT:-40443}
-    [[ ! "$PORT" =~ ^[0-9]+$ ]] && PORT=40443
+    ! echo "$PORT" | grep -qE '^[0-9]+$' && PORT=40443
     
-    local GENPASS=$(openssl rand -base64 16)
+    GENPASS=$(openssl rand -base64 16)
     get_ip_cache
-    local SNI="${DOMAIN:-www.bing.com}"
+    SNI="${DOMAIN:-www.bing.com}"
 
     echo -e "${YELLOW}▶ 生成 ECC 证书...${NC}"
     openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
@@ -177,8 +177,9 @@ EOF
 # 完整卸载
 uninstall_hy2() {
     echo -e "${YELLOW}▶ 正在彻底清理 Hysteria2...${NC}"
-    local port=$(grep "listen:" "$CONF" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' | sed 's/://g')
-    [[ -n "$port" ]] && manage_firewall "del" "$port"
+    local port
+    port=$(grep "listen:" "$CONF" 2>/dev/null | awk '{print $2}' | tr -d '[:space:]' | sed 's/://g')
+    [ -n "$port" ] && manage_firewall "del" "$port"
     service hysteria stop 2>/dev/null || true
     rc-update del hysteria default 2>/dev/null || true
     rm -f /etc/init.d/hysteria /usr/local/bin/hy2 "$BIN" 2>/dev/null
@@ -205,7 +206,7 @@ while true; do
     echo -e "  ${CYAN}[0]${NC} 退出脚本"
     echo -e "${GREEN}===============================================${NC}"
     read -p "选择操作 [0-7]: " choice
-    case $choice in
+    case "$choice" in
         1) install_hy2 ;;
         2) show_config ;;
         3) change_port ;;
@@ -217,5 +218,5 @@ while true; do
         *) echo -e "${RED}输入错误${NC}" ;;
     esac
     echo -e "\n按任意键返回..."
-    read -n 1 -s -r
+    read -r tmp
 done
