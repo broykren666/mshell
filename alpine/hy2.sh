@@ -60,6 +60,15 @@ get_bbr_status() {
     fi
 }
 
+# 服务状态检测
+get_service_status() {
+    if rc-service hysteria status 2>/dev/null | grep -q "started"; then
+        echo -e "${GREEN}运行中${NC}"
+    else
+        echo -e "${RED}未安装/未运行${NC}"
+    fi
+}
+
 # 自动化防火墙
 manage_firewall() {
     local action="$1" port="$2"
@@ -207,6 +216,7 @@ EOF
     chmod +x /usr/local/bin/hy2
 
     echo -e "${GREEN}✅ 安装圆满完成！${NC}"
+    echo -e "${CYAN}💡 快捷启动命令已创建：在任何位置输入 ${YELLOW}hy2${CYAN} 即可打开本菜单${NC}"
     show_config
 }
 
@@ -232,26 +242,24 @@ while true; do
     echo -e "${GREEN}===============================================${NC}"
     echo -e "      Hysteria2 Alpine 专版管理脚本"
     echo -e "  IPv4: ${YELLOW}$IP4_CACHE${NC}  IPv6: ${YELLOW}$IP6_CACHE${NC}"
-    echo -e "  BBR 状态: $(get_bbr_status)"
+    echo -e "  状态: $(get_service_status)  |  BBR: $(get_bbr_status)"
     echo -e "${GREEN}===============================================${NC}"
     echo -e "  ${CYAN}[1]${NC} 安装 Hysteria2"
     echo -e "  ${CYAN}[2]${NC} 查看配置信息 (链接)"
     echo -e "  ${CYAN}[3]${NC} 修改监听端口"
     echo -e "  ${CYAN}[4]${NC} 实时日志"
     echo -e "  ${CYAN}[5]${NC} 重启服务"
-    echo -e "  ${CYAN}[6]${NC} 服务状态"
-    echo -e "  ${CYAN}[7]${NC} 彻底卸载"
+    echo -e "  ${CYAN}[6]${NC} 彻底卸载"
     echo -e "  ${CYAN}[0]${NC} 退出脚本"
     echo -e "${GREEN}===============================================${NC}"
-    read -p "选择操作 [0-7]: " choice
+    read -p "选择操作 [0-6]: " choice
     case "$choice" in
         1) install_hy2 ;;
         2) show_config ;;
         3) change_port ;;
         4) view_logs ;;
         5) service hysteria restart; echo -e "${GREEN}已重启${NC}" ;;
-        6) service hysteria status ;;
-        7) uninstall_hy2 ;;
+        6) uninstall_hy2 ;;
         0) exit 0 ;;
         *) echo -e "${RED}输入错误${NC}" ;;
     esac
