@@ -149,6 +149,35 @@ change_port() {
     echo -e "${GREEN}✅ 端口已成功更新为 $new_port${NC}"
 }
 
+# 动态修改域名
+change_domain() {
+    if [ ! -f "$CONF" ]; then
+        echo -e "${RED}❌ 尚未安装 Hysteria2${NC}"; return
+    fi
+    local old_sni new_sni
+    old_sni=$(openssl x509 -noout -subject -in "$WORKDIR/server.crt" 2>/dev/null | sed 's/.*CN[ =]*//' | tr -d '[:space:]')
+    if [ -z "$old_sni" ]; then
+        old_sni="www.bing.com"
+    fi
+    echo -e "当前域名 (SNI) 为: ${YELLOW}$old_sni${NC}"
+    read -p "请输入新域名 (回车默认 www.bing.com): " new_sni
+    if [ -z "$new_sni" ]; then
+        new_sni="www.bing.com"
+    fi
+
+    echo -e "${YELLOW}▶ 正在重新生成 ECC 证书...${NC}"
+    openssl ecparam -name prime256v1 -out "$WORKDIR/param.pem"
+    openssl req -x509 -nodes -newkey ec:"$WORKDIR/param.pem" \
+        -keyout "$WORKDIR/server.key" -out "$WORKDIR/server.crt" \
+        -subj "/CN=$new_sni" -days 3650 2>/dev/null
+    rm -f "$WORKDIR/param.pem"
+
+    sed -i "s|url: .*|url: https://$new_sni/|g" "$CONF"
+    
+    service hysteria restart || true
+    echo -e "${GREEN}✅ 域名已成功更新为 $new_sni${NC}"
+}
+
 # 安装流程
 install_hy2() {
     prepare_env
@@ -269,21 +298,23 @@ while true; do
     echo -e "  ${CYAN}[1]${NC} 安装 Hysteria2"
     echo -e "  ${CYAN}[2]${NC} 查看配置信息 (链接)"
     echo -e "  ${CYAN}[3]${NC} 修改监听端口"
-    echo -e "  ${CYAN}[4]${NC} 实时日志"
-    echo -e "  ${CYAN}[5]${NC} 重启服务"
-    echo -e "  ${CYAN}[6]${NC} 彻底卸载"
-    echo -e "  ${CYAN}[7]${NC} 更新管理脚本"
+    echo -e "  ${CYAN}[4]${NC} 修改绑定域名"
+    echo -e "  ${CYAN}[5]${NC} 实时日志"
+    echo -e "  ${CYAN}[6]${NC} 重启服务"
+    echo -e "  ${CYAN}[7]${NC} 彻底卸载"
+    echo -e "  ${CYAN}[8]${NC} 更新管理脚本"
     echo -e "  ${CYAN}[0]${NC} 退出脚本"
     echo -e "${GREEN}===============================================${NC}"
-    read -p "选择操作 [0-7]: " choice
+    read -p "选择操作 [0-8]: " choice
     case "$choice" in
         1) install_hy2 ;;
         2) show_config ;;
         3) change_port ;;
-        4) view_logs ;;
-        5) service hysteria restart; echo -e "${GREEN}已重启${NC}" ;;
-        6) uninstall_hy2 ;;
-        7) update_script ;;
+        4) change_domain ;;
+        5) view_logs ;;
+        6) service hysteria restart; echo -e "${GREEN}已重启${NC}" ;;
+        7) uninstall_hy2 ;;
+        8) update_script ;;
         0) exit 0 ;;
         *) echo -e "${RED}输入错误${NC}" ;;
     esac
