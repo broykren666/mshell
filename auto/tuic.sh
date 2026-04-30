@@ -81,7 +81,11 @@ restart_service() {
 view_logs() {
     echo -e "${YELLOW}▶ 正在查看实时日志 (按 Ctrl+C 退出)...${NC}"
     if [[ "$OS" = "alpine" ]]; then
-        tail -f /var/log/messages | grep tuic || echo -e "${RED}无法读取日志${NC}"
+        if [[ -f /var/log/tuic.log ]]; then
+            tail -f /var/log/tuic.log
+        else
+            tail -f /var/log/messages | grep --line-buffered tuic || echo -e "${RED}无法读取日志${NC}"
+        fi
     else
         journalctl -u "${SERVICE_NAME}" -f
     fi
@@ -203,6 +207,39 @@ change_port() {
     show_info
 }
 
+# 修改绑定域名
+change_domain() {
+    if [[ ! -f "$CONF" ]]; then
+        echo -e "${RED}❌ 请先安装 TUIC${NC}"; return
+    fi
+    prepare_env
+    
+    local OLD_DOMAIN=""
+    [[ -f "$WORK_DIR/domain.txt" ]] && OLD_DOMAIN=$(cat "$WORK_DIR/domain.txt")
+    
+    echo -e "当前绑定域名: ${YELLOW}${OLD_DOMAIN:-无}${NC}"
+    read -p "请输入新的绑定域名 (回车清空绑定域名): " NEW_DOMAIN
+    
+    if [[ -z "$NEW_DOMAIN" ]]; then
+        rm -f "$WORK_DIR/domain.txt"
+    else
+        echo "$NEW_DOMAIN" > "$WORK_DIR/domain.txt"
+        
+        # 如果使用自签证书，则重新生成
+        local CERT_PATH=$(jq -r '.tls.certificate' "$CONF")
+        if [[ "$CERT_PATH" == "$WORK_DIR/"* ]]; then
+            echo -e "${YELLOW}▶ 生成对应新域名的自签证书...${NC}"
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+                -keyout "$WORK_DIR/key.pem" -out "$WORK_DIR/cert.pem" \
+                -subj "/CN=$NEW_DOMAIN" -days 3650 -nodes 2>/dev/null
+        fi
+    fi
+    
+    restart_service
+    echo -e "${GREEN}✅ 域名配置已更新${NC}"
+    show_info
+}
+
 # 安装 TUIC
 install_tuic() {
     prepare_env
@@ -304,6 +341,8 @@ command_args="-c ${CONF}"
 pidfile="/run/\${RC_SVCNAME}.pid"
 command_background=true
 supervisor="supervise-daemon"
+output_log="/var/log/tuic.log"
+error_log="/var/log/tuic.log"
 depend() {
     need net
 }
@@ -421,14 +460,15 @@ echo -e "${GREEN}===============================================${NC}"
 echo -e "  ${CYAN}[1]${NC}  安装 TUIC"
 echo -e "  ${CYAN}[2]${NC}  查看配置节点链接"
 echo -e "  ${CYAN}[3]${NC}  更改监听端口"
-echo -e "  ${CYAN}[4]${NC}  查看实时日志"
-echo -e "  ${CYAN}[5]${NC}  优化 BBR 加速"
-echo -e "  ${CYAN}[6]${NC}  重启服务"
-echo -e "  ${CYAN}[7]${NC}  卸载 TUIC"
-echo -e "  ${CYAN}[8]${NC}  更新管理脚本"
+echo -e "  ${CYAN}[4]${NC}  修改绑定域名"
+echo -e "  ${CYAN}[5]${NC}  查看实时日志"
+echo -e "  ${CYAN}[6]${NC}  优化 BBR 加速"
+echo -e "  ${CYAN}[7]${NC}  重启服务"
+echo -e "  ${CYAN}[8]${NC}  卸载 TUIC"
+echo -e "  ${CYAN}[9]${NC}  更新管理脚本"
 echo -e "  ${CYAN}[0]${NC}  退出脚本"
 echo -e "${GREEN}===============================================${NC}"
-echo -ne "请输入数字选择 [0-8]: "
+echo -ne "请输入数字选择 [0-9]: "
 read choice
 
 case $choice in
@@ -442,18 +482,21 @@ case $choice in
             change_port
             ;;
         4)
-            view_logs
+            change_domain
             ;;
         5)
-            optimize_bbr
+            view_logs
             ;;
         6)
-            restart_service && echo -e "${GREEN}服务已重启${NC}"
+            optimize_bbr
             ;;
         7)
-            uninstall_tuic
+            restart_service && echo -e "${GREEN}服务已重启${NC}"
             ;;
         8)
+            uninstall_tuic
+            ;;
+        9)
             update_script
             ;;
         0)

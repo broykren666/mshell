@@ -83,7 +83,11 @@ restart_service() {
 view_logs() {
     echo -e "${YELLOW}▶ 正在查看实时日志 (按 Ctrl+C 退出)...${NC}"
     if [[ "$OS" = "alpine" ]]; then
-        tail -f /var/log/messages | grep xray || echo -e "${RED}无法读取日志${NC}"
+        if [[ -f /var/log/xray.log ]]; then
+            tail -f /var/log/xray.log
+        else
+            tail -f /var/log/messages | grep --line-buffered xray || echo -e "${RED}无法读取日志${NC}"
+        fi
     else
         journalctl -u xray -f
     fi
@@ -231,6 +235,47 @@ change_port() {
     show_info
 }
 
+# 修改域名/伪装目标
+change_domain() {
+    if [[ ! -f "$XRAY_CONFIG" ]]; then
+        echo -e "${RED}❌ 请先安装 VLESS-REALITY${NC}"; return
+    fi
+    prepare_env
+    
+    local OLD_DEST=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$XRAY_CONFIG")
+    local OLD_DOMAIN=""
+    [[ -f "$XRAY_CONFIG_DIR/domain.txt" ]] && OLD_DOMAIN=$(cat "$XRAY_CONFIG_DIR/domain.txt")
+    
+    echo -e "当前伪装目标域名 (DEST/SNI): ${YELLOW}$OLD_DEST${NC}"
+    [[ -n "$OLD_DOMAIN" ]] && echo -e "当前绑定域名: ${YELLOW}$OLD_DOMAIN${NC}"
+    
+    echo -e "${CYAN}请选择操作:${NC}"
+    echo -e "1. 仅修改伪装目标域名 (DEST/SNI)"
+    echo -e "2. 修改绑定域名"
+    read -p "请输入选择 [1-2] (回车取消): " DOMAIN_OPTS
+    
+    if [[ "$DOMAIN_OPTS" == "1" ]]; then
+        read -p "请输入新的伪装目标域名 (回车取消): " NEW_DEST
+        [[ -z "$NEW_DEST" ]] && return
+        
+        local tmp=$(mktemp)
+        jq --arg dest "$NEW_DEST" '.inbounds[0].streamSettings.realitySettings.serverNames = [$dest] | .inbounds[0].streamSettings.realitySettings.dest = ($dest + ":443")' "$XRAY_CONFIG" > "$tmp" && mv "$tmp" "$XRAY_CONFIG"
+        
+        restart_service
+        echo -e "${GREEN}✅ 伪装目标域名已更改为 $NEW_DEST${NC}"
+        show_info
+    elif [[ "$DOMAIN_OPTS" == "2" ]]; then
+        read -p "请输入新的绑定域名 (回车清空绑定域名): " NEW_DOMAIN
+        if [[ -z "$NEW_DOMAIN" ]]; then
+            rm -f "$XRAY_CONFIG_DIR/domain.txt"
+        else
+            echo "$NEW_DOMAIN" > "$XRAY_CONFIG_DIR/domain.txt"
+        fi
+        echo -e "${GREEN}✅ 绑定域名已更新${NC}"
+        show_info
+    fi
+}
+
 # 安装 REALITY
 install_reality() {
     prepare_env
@@ -320,6 +365,8 @@ command_args="run -config $XRAY_CONFIG"
 command_background="yes"
 pidfile="/run/xray.pid"
 supervisor="supervise-daemon"
+output_log="/var/log/xray.log"
+error_log="/var/log/xray.log"
 depend() {
     need net
 }
@@ -438,14 +485,15 @@ echo -e "${GREEN}===============================================${NC}"
 echo -e "  ${CYAN}[1]${NC}  安装 VLESS-REALITY"
 echo -e "  ${CYAN}[2]${NC}  查看配置节点链接"
 echo -e "  ${CYAN}[3]${NC}  更改监听端口"
-echo -e "  ${CYAN}[4]${NC}  查看实时日志"
-echo -e "  ${CYAN}[5]${NC}  优化 BBR 加速"
-echo -e "  ${CYAN}[6]${NC}  重启服务"
-echo -e "  ${CYAN}[7]${NC}  卸载 VLESS-REALITY"
-echo -e "  ${CYAN}[8]${NC}  更新管理脚本"
+echo -e "  ${CYAN}[4]${NC}  修改伪装域名/绑定域名"
+echo -e "  ${CYAN}[5]${NC}  查看实时日志"
+echo -e "  ${CYAN}[6]${NC}  优化 BBR 加速"
+echo -e "  ${CYAN}[7]${NC}  重启服务"
+echo -e "  ${CYAN}[8]${NC}  卸载 VLESS-REALITY"
+echo -e "  ${CYAN}[9]${NC}  更新管理脚本"
 echo -e "  ${CYAN}[0]${NC}  退出脚本"
 echo -e "${GREEN}===============================================${NC}"
-echo -ne "请输入数字选择 [0-8]: "
+echo -ne "请输入数字选择 [0-9]: "
 read choice
 
 case $choice in
@@ -459,18 +507,21 @@ case $choice in
             change_port
             ;;
         4)
-            view_logs
+            change_domain
             ;;
         5)
-            optimize_bbr
+            view_logs
             ;;
         6)
-            restart_service && echo -e "${GREEN}服务已重启${NC}"
+            optimize_bbr
             ;;
         7)
-            uninstall_reality
+            restart_service && echo -e "${GREEN}服务已重启${NC}"
             ;;
         8)
+            uninstall_reality
+            ;;
+        9)
             update_script
             ;;
         0)
