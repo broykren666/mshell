@@ -200,7 +200,7 @@ install_hy2() {
         PORT=40443
     fi
     
-    GENPASS=$(openssl rand -base64 16)
+    GENPASS=$(openssl rand -hex 12)
     get_ip_cache
     SNI="${DOMAIN:-www.bing.com}"
 
