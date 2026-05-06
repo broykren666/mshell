@@ -433,7 +433,7 @@ uninstall_reality() {
 # 更新脚本
 update_script() {
     echo -e "${YELLOW}▶ 正在从 GitHub 检查更新...${NC}"
-    local url="https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/reality.sh"
+    local url="https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/auto/reality.sh"
     local tmp_file="/tmp/reality_update.sh"
     
     if curl -sL -o "$tmp_file" "$url"; then

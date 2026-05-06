@@ -408,7 +408,7 @@ uninstall_tuic() {
 # 更新脚本
 update_script() {
     echo -e "${YELLOW}▶ 正在从 GitHub 检查更新...${NC}"
-    local url="https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/tuic.sh"
+    local url="https://raw.githubusercontent.com/broykren666/mshell/refs/heads/main/auto/tuic.sh"
     local tmp_file="/tmp/tuic_update.sh"
     
     if curl -sL -o "$tmp_file" "$url"; then
