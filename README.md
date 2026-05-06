@@ -4,13 +4,19 @@
 
 ---
 
-## 📋 系统要求
+## 系统要求
 
 - **操作系统**：Debian 11+, Ubuntu 20.04+, Alpine Linux。
 - **权限**：必须以 `root` 用户运行。
+
+## 详细文档
+
+* [自动适配系统](./auto/README.md)
+
+* [Alpine系统](./alpine/README.md)
 
 ---
 
 **由 Gemini CLI 协助进行代码审查与功能增强。**
 
-
+- 
