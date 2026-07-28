@@ -295,8 +295,9 @@ install_tuic() {
 
     echo "$PORT" > "$PORT_FILE"
     UUID=$(cat /proc/sys/kernel/random/uuid)
+    # 默认仅绑定 IPv4，避免部分 VPS/容器在双栈 socket 上设置 IPV6_V6ONLY 失败
+    # （报错：endpoint dual-stack socket setting error: Protocol not available os error 92）
     BIND_ADDR="0.0.0.0"
-    ip -6 addr | grep -q "global" && BIND_ADDR="[::]"
 
     read -p "请输入绑定的域名 (可选, 直接回车使用 IP): " DOMAIN
     read -p "请输入伪装 SNI (回车默认 www.bing.com): " CUSTOM_SNI
@@ -341,6 +342,7 @@ install_tuic() {
     cat > "$CONF" <<EOF
 {
   "server": "${BIND_ADDR}:${PORT}",
+  "dual_stack": false,
   "users": {
     "${UUID}": "${PASS}"
   },
