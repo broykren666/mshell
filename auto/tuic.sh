@@ -77,6 +77,26 @@ restart_service() {
     fi
 }
 
+# 验证服务是否真的跑起来（避免“装完显示未运行”却看不到原因）
+verify_running() {
+    sleep 2
+    if [[ "$OS" = "alpine" ]]; then
+        if rc-service "${SERVICE_NAME}" status 2>/dev/null | grep -q "started"; then
+            echo -e "${GREEN}✅ 服务正在运行${NC}"
+        else
+            echo -e "${RED}❌ 服务未能启动，请查看日志：${NC}"
+            tail -n 30 /var/log/tuic.log 2>/dev/null || true
+        fi
+    else
+        if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+            echo -e "${GREEN}✅ 服务正在运行${NC}"
+        else
+            echo -e "${RED}❌ 服务启动失败，最近日志如下（也可执行 journalctl -u ${SERVICE_NAME} -n 50 --no-pager 查看）：${NC}"
+            journalctl -u "${SERVICE_NAME}" -n 30 --no-pager 2>/dev/null || true
+        fi
+    fi
+}
+
 # 查看日志
 view_logs() {
     echo -e "${YELLOW}▶ 正在查看实时日志 (按 Ctrl+C 退出)...${NC}"
@@ -229,9 +249,11 @@ change_domain() {
         local CERT_PATH=$(jq -r '.tls.certificate' "$CONF")
         if [[ "$CERT_PATH" == "$WORK_DIR/"* ]]; then
             echo -e "${YELLOW}▶ 生成对应新域名的自签证书...${NC}"
-            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+            if ! openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
                 -keyout "$WORK_DIR/key.pem" -out "$WORK_DIR/cert.pem" \
-                -subj "/CN=$NEW_DOMAIN" -days 3650 -nodes 2>/dev/null
+                -subj "/CN=$NEW_DOMAIN" -days 3650 -nodes; then
+                echo -e "${RED}❌ 自签证书生成失败${NC}"; return
+            fi
         fi
     fi
     
@@ -304,9 +326,14 @@ install_tuic() {
 
     if [[ "$USE_CUSTOM_CERT" != "y" && "$USE_CUSTOM_CERT" != "Y" ]]; then
         echo -e "${YELLOW}▶ 生成自签证书...${NC}"
-        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+        if ! openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
             -keyout "$WORK_DIR/key.pem" -out "$WORK_DIR/cert.pem" \
-            -subj "/CN=${DOMAIN:-$CUSTOM_SNI}" -days 3650 -nodes 2>/dev/null
+            -subj "/CN=${DOMAIN:-$CUSTOM_SNI}" -days 3650 -nodes; then
+            echo -e "${RED}❌ 自签证书生成失败，请检查 openssl 是否正常${NC}"; exit 1
+        fi
+        if [[ ! -s "$WORK_DIR/cert.pem" || ! -s "$WORK_DIR/key.pem" ]]; then
+            echo -e "${RED}❌ 证书文件为空，生成失败${NC}"; exit 1
+        fi
         CERT_FILE_PATH="$WORK_DIR/cert.pem"
         KEY_FILE_PATH="$WORK_DIR/key.pem"
     fi
@@ -355,8 +382,11 @@ EOF
 Description=TUIC Server
 After=network.target
 [Service]
+Type=simple
 ExecStart=${BIN} -c ${CONF}
 Restart=always
+RestartSec=3
+StartLimitBurst=0
 LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
@@ -373,6 +403,7 @@ EOF
     fi
 
     restart_service
+    verify_running
     echo -e "${GREEN}✅ TUIC 安装并配置完成${NC}"
     echo -e "${CYAN}💡 快捷键已创建，下次可直接输入 ${YELLOW}tuic${CYAN} 进入此菜单${NC}"
     show_info
