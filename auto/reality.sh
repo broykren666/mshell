@@ -79,6 +79,26 @@ restart_service() {
     fi
 }
 
+# 验证服务是否真的跑起来（避免“装完显示未运行”却看不到原因）
+verify_running() {
+    sleep 2
+    if [[ "$OS" = "alpine" ]]; then
+        if rc-service xray status 2>/dev/null | grep -q "started"; then
+            echo -e "${GREEN}✅ 服务正在运行${NC}"
+        else
+            echo -e "${RED}❌ 服务未能启动，请查看日志：${NC}"
+            tail -n 30 /var/log/xray.log 2>/dev/null || true
+        fi
+    else
+        if systemctl is-active --quiet xray 2>/dev/null; then
+            echo -e "${GREEN}✅ 服务正在运行${NC}"
+        else
+            echo -e "${RED}❌ 服务启动失败，最近日志如下（也可执行 journalctl -u xray -n 50 --no-pager 查看）：${NC}"
+            journalctl -u xray -n 30 --no-pager 2>/dev/null || true
+        fi
+    fi
+}
+
 # 查看日志
 view_logs() {
     echo -e "${YELLOW}▶ 正在查看实时日志 (按 Ctrl+C 退出)...${NC}"
@@ -379,9 +399,12 @@ EOF
 Description=Xray Service
 After=network.target nss-lookup.target
 [Service]
+Type=simple
 User=root
 ExecStart=$XRAY_BIN run -config $XRAY_CONFIG
 Restart=always
+RestartSec=3
+StartLimitBurst=0
 LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
@@ -398,6 +421,7 @@ EOF
     fi
 
     restart_service
+    verify_running
     echo -e "${GREEN}✅ VLESS-REALITY 安装完成${NC}"
     echo -e "${CYAN}💡 快捷键已创建，下次可直接输入 ${YELLOW}real${CYAN} 进入此菜单${NC}"
     show_info

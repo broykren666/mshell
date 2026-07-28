@@ -79,6 +79,26 @@ restart_service() {
     fi
 }
 
+# 验证服务是否真的跑起来（避免“装完显示未运行”却看不到原因）
+verify_running() {
+    sleep 2
+    if [[ "$OS" = "alpine" ]]; then
+        if rc-service hysteria status 2>/dev/null | grep -q "started"; then
+            echo -e "${GREEN}✅ 服务正在运行${NC}"
+        else
+            echo -e "${RED}❌ 服务未能启动，请查看日志：${NC}"
+            tail -n 30 /var/log/hysteria.log 2>/dev/null || true
+        fi
+    else
+        if systemctl is-active --quiet hysteria 2>/dev/null; then
+            echo -e "${GREEN}✅ 服务正在运行${NC}"
+        else
+            echo -e "${RED}❌ 服务启动失败，最近日志如下（也可执行 journalctl -u hysteria -n 50 --no-pager 查看）：${NC}"
+            journalctl -u hysteria -n 30 --no-pager 2>/dev/null || true
+        fi
+    fi
+}
+
 # 查看日志
 view_logs() {
     echo -e "${YELLOW}▶ 正在查看实时日志 (按 Ctrl+C 退出)...${NC}"
@@ -255,7 +275,9 @@ change_domain() {
             local CERT_PATH=$(jq -r '.tls.cert' "$CONF")
             if [[ "$CERT_PATH" == "$WORKDIR/"* ]]; then
                 echo -e "${YELLOW}▶ 生成对应新域名的自签证书...${NC}"
-                openssl req -x509 -nodes -newkey rsa:2048 -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" -days 3650 -subj "/CN=$NEW_DOMAIN" 2>/dev/null
+                if ! openssl req -x509 -nodes -newkey rsa:2048 -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" -days 3650 -subj "/CN=$NEW_DOMAIN"; then
+                    echo -e "${RED}⚠️ 自签证书生成失败，TLS 可能异常${NC}"
+                fi
             fi
         fi
         restart_service
@@ -278,7 +300,9 @@ install_hy2() {
     esac
 
     echo -e "${YELLOW}▶ 下载 Hysteria2 ($ARCH)...${NC}"
-    curl -L -o "$BIN" "https://github.com/apernet/hysteria/releases/latest/download/$FILE"
+    if ! curl -fL -o "$BIN" "https://github.com/apernet/hysteria/releases/latest/download/$FILE"; then
+        echo -e "${RED}❌ 下载失败，请检查网络或架构 ($FILE)${NC}"; exit 1
+    fi
     chmod +x "$BIN"
 
     read -p "请输入认证密码 (回车生成随机强密码): " PASSWORD
@@ -323,7 +347,12 @@ install_hy2() {
 
     if [[ "$USE_CUSTOM_CERT" != "y" && "$USE_CUSTOM_CERT" != "Y" ]]; then
         echo -e "${YELLOW}▶ 生成自签证书...${NC}"
-        openssl req -x509 -nodes -newkey rsa:2048 -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" -days 3650 -subj "/CN=${DOMAIN:-$CUSTOM_SNI}" 2>/dev/null
+        if ! openssl req -x509 -nodes -newkey rsa:2048 -keyout "$WORKDIR/key.pem" -out "$WORKDIR/cert.pem" -days 3650 -subj "/CN=${DOMAIN:-$CUSTOM_SNI}"; then
+            echo -e "${RED}❌ 自签证书生成失败，请检查 openssl 是否正常${NC}"; exit 1
+        fi
+        if [[ ! -s "$WORKDIR/cert.pem" || ! -s "$WORKDIR/key.pem" ]]; then
+            echo -e "${RED}❌ 证书文件为空，生成失败${NC}"; exit 1
+        fi
         CERT_FILE_PATH="$WORKDIR/cert.pem"
         KEY_FILE_PATH="$WORKDIR/key.pem"
     fi
@@ -379,8 +408,11 @@ EOF
 Description=Hysteria2 Service
 After=network.target
 [Service]
+Type=simple
 ExecStart=$BIN server -c $CONF
 Restart=always
+RestartSec=3
+StartLimitBurst=0
 LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
@@ -397,6 +429,7 @@ EOF
     fi
 
     restart_service
+    verify_running
     echo -e "${GREEN}✅ Hysteria2 安装完成 ${NC}"
     echo -e "${CYAN}💡 快捷键已创建，下次可直接输入 ${YELLOW}hy2${CYAN} 进入此菜单${NC}"
     show_info
